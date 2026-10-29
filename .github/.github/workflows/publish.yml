@@ -1,29 +1,5 @@
-name: Publicar ofertas Telegram
-
-on:
-  schedule:
-    - cron: "0 */6 * * *"
-  workflow_dispatch:
-
-jobs:
-  publicar:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Baixar repositório
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Instalar dependências
-        run: pip install -r requirements.txt
-
-      - name: Publicar ofertas
-        env:
-          GH_AUTOMATION_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python publish_telegram.py
+# Arquivo duplicado — o workflow real está em .github/workflows/publish.yml
+# Este arquivo foi mantido apenas como referência para evitar conflitos de configuração.
+name: workflow-duplicado-desativado
+on: workflow_dispatch
+jobs: {}
