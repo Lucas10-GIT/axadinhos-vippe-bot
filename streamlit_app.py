@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import requests
 import streamlit as st
+from publish_telegram import ad as telegram_ad, parse_bool
 
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
@@ -38,10 +39,21 @@ def clean(df):
     df = df[COLS]
     for c in ["id","cliques","pedidos"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+    used_ids = set()
+    next_id = max(1, int(df["id"].max()) + 1 if len(df) else 1)
+    for index in df.index:
+        product_id = int(df.at[index, "id"])
+        if product_id <= 0 or product_id in used_ids:
+            while next_id in used_ids:
+                next_id += 1
+            product_id = next_id
+            next_id += 1
+            df.at[index, "id"] = product_id
+        used_ids.add(product_id)
     for c in ["comissao","comissao_estimada","frequencia_dias"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     df["frequencia_dias"] = df["frequencia_dias"].clip(1,30).astype(int)
-    df["ativo"] = df["ativo"].fillna(True).astype(bool)
+    df["ativo"] = df["ativo"].map(lambda value: parse_bool(value, default=True))
     return df
 
 def gh_headers(token):
@@ -172,9 +184,12 @@ with t4:
                 if str(row["imagem_url"]).strip():
                     r=requests.post(f"{base}/sendPhoto",
                         data={"chat_id":chat,"photo":row["imagem_url"],
-                              "caption":ad(row),"parse_mode":"Markdown"},timeout=30)
+                              "caption":telegram_ad(row),"parse_mode":"HTML"},timeout=30)
                 else:
                     r=requests.post(f"{base}/sendMessage",
-                        data={"chat_id":chat,"text":ad(row),
-                              "parse_mode":"Markdown"},timeout=30)
-                st.success("Enviado!") if r.ok else st.error(r.text)
+                        data={"chat_id":chat,"text":telegram_ad(row),
+                              "parse_mode":"HTML"},timeout=30)
+                if r.ok and r.json().get("ok"):
+                    st.success("Enviado!")
+                else:
+                    st.error(r.json().get("description", r.text))
