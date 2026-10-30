@@ -1,0 +1,36 @@
+name: Teste real de envio Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_send:
+        description: "Confirme para enviar uma única mensagem técnica ao chat configurado."
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-smoke-test
+  cancel-in-progress: false
+
+jobs:
+  send-test-message:
+    name: Envio único de mensagem técnica
+    if: ${{ inputs.confirm_send == true && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Enviar mensagem de teste
+        run: python scripts/telegram_smoke_test.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
