@@ -1,67 +1,218 @@
-import base64, io, os
-from datetime import datetime, timedelta
+"""Publicador do Axadinhos Vippe.
+
+Importar este módulo não faz chamadas de rede. A execução só ocorre quando
+chamado como script, o que permite testes seguros sem tokens ou mensagens.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import math
+import os
+from datetime import datetime, timedelta, timezone
+from html import escape
+from typing import Any
+
 import pandas as pd
 import requests
 
-OWNER="Lucas10-GIT"; REPO="axadinhos-vippe-bot"; BRANCH="main"
-PATH="data/products.csv"
+OWNER = "Lucas10-GIT"
+REPO = "axadinhos-vippe-bot"
+BRANCH = "main"
+PATH = "data/products.csv"
+DEFAULT_FREQUENCY_DAYS = 3
 
-def headers(token):
-    return {"Accept":"application/vnd.github+json","Authorization":f"Bearer {token}","X-GitHub-Api-Version":"2022-11-28"}
 
-def load(token):
-    u=f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{PATH}?ref={BRANCH}"
-    r=requests.get(u,headers=headers(token),timeout=20); r.raise_for_status()
-    p=r.json(); return pd.read_csv(io.StringIO(base64.b64decode(p["content"]).decode())),p["sha"]
+def headers(token: str) -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
 
-def save(token,df,sha):
-    raw=df.to_csv(index=False).encode()
-    body={"message":"Publicação automática Axadinhos Vippe","content":base64.b64encode(raw).decode(),"branch":BRANCH,"sha":sha}
-    u=f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{PATH}"
-    r=requests.put(u,headers=headers(token),json=body,timeout=30); r.raise_for_status()
 
-def ad(row):
-    return (f"🔥 *ACHADINHO DO DIA!*\n\n🛍️ *{row['nome']}*\n\n"
-            f"💰 *Preço:* {row['preco'] or 'Confira o preço'}\n\n"
-            f"👉 *Ver na Shopee:*\n{row['link']}\n\n"
-            "👑 *Axadinhos Vippe*\n_Se é útil, é achadinho!_")
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
 
-token=os.environ["GITHUB_TOKEN"]; tg=os.environ["TELEGRAM_BOT_TOKEN"]; chat=os.environ["TELEGRAM_CHAT_ID"]
-df,sha=load(token)
-now=datetime.utcnow()
 
-candidates=[]
-for i,row in df.iterrows():
-    if str(row.get("ativo",True)).lower() not in ["true","1","yes"]:
-        continue
-    freq=int(float(row.get("frequencia_dias",3) or 3))
-    last=str(row.get("ultima_publicacao","")).strip()
-    due=True
-    if last:
-        try: due=(now-datetime.fromisoformat(last)).total_seconds() >= freq*86400
-        except: pass
-    if due: candidates.append((i,row))
+def parse_bool(value: Any, default: bool = True) -> bool:
+    """Interpret CSV booleans correctly (e.g. the string 'False' is false)."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().casefold()
+    if normalized in {"true", "1", "yes", "y", "sim", "s", "ativo"}:
+        return True
+    if normalized in {"false", "0", "no", "n", "não", "nao", "inativo", ""}:
+        return False
+    return default
 
-if not candidates:
-    print("Nenhum produto vencido para publicação.")
-    raise SystemExit(0)
 
-def score(row):
-    clicks=float(row.get("cliques",0) or 0); orders=float(row.get("pedidos",0) or 0); comm=float(row.get("comissao_estimada",0) or 0)
-    return orders*5 + comm + (orders/max(clicks,1))*100
+def parse_utc(value: Any) -> datetime | None:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
-idx,row=max(candidates,key=lambda x:score(x[1]))
-base=f"https://api.telegram.org/bot{tg}"
-img=str(row.get("imagem_url","")).strip()
-if img:
-    r=requests.post(f"{base}/sendPhoto",data={"chat_id":chat,"photo":img,"caption":ad(row),"parse_mode":"Markdown"},timeout=30)
-else:
-    r=requests.post(f"{base}/sendMessage",data={"chat_id":chat,"text":ad(row),"parse_mode":"Markdown"},timeout=30)
-r.raise_for_status()
 
-df.at[idx,"ultima_publicacao"]=now.isoformat()
-freq=2 if (float(row.get("pedidos",0) or 0)>=2) else 4 if float(row.get("cliques",0) or 0)>=10 else 3
-df.at[idx,"frequencia_dias"]=freq
-df.at[idx,"proxima_publicacao"]=(now+timedelta(days=freq)).isoformat()
-save(token,df,sha)
-print(f"Publicado: {row['nome']} | próxima em {freq} dias")
+def is_due(row: Any, now: datetime | None = None) -> bool:
+    if not parse_bool(row.get("ativo", True)):
+        return False
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    frequency = int(_number(row.get("frequencia_dias", DEFAULT_FREQUENCY_DAYS), DEFAULT_FREQUENCY_DAYS))
+    frequency = min(30, max(1, frequency))
+    last_published = parse_utc(row.get("ultima_publicacao", ""))
+    if last_published is None:
+        return True
+    return current - last_published >= timedelta(days=frequency)
+
+
+def score(row: Any) -> float:
+    clicks = max(0.0, _number(row.get("cliques", 0)))
+    orders = max(0.0, _number(row.get("pedidos", 0)))
+    commission = max(0.0, _number(row.get("comissao_estimada", 0)))
+    return orders * 5 + commission + (orders / max(clicks, 1)) * 100
+
+
+def select_candidate(df: pd.DataFrame, now: datetime | None = None):
+    """Return the due (index, row) with the highest score, or None."""
+    candidates = [(index, row) for index, row in df.iterrows() if is_due(row, now)]
+    return max(candidates, key=lambda item: score(item[1])) if candidates else None
+
+
+def publication_frequency(row: Any) -> int:
+    orders = _number(row.get("pedidos", 0))
+    clicks = _number(row.get("cliques", 0))
+    if orders >= 2:
+        return 2
+    if clicks >= 10:
+        return 4
+    return DEFAULT_FREQUENCY_DAYS
+
+
+def _display(value: Any, fallback: str = "") -> str:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return fallback
+    text = str(value).strip()
+    return text or fallback
+
+
+def ad(row: Any) -> str:
+    """Build a Telegram HTML caption with escaped, user-entered product fields."""
+    name = escape(_display(row.get("nome"), "Achadinho"))
+    price = escape(_display(row.get("preco"), "Confira o preço"))
+    link = escape(_display(row.get("link")), quote=True)
+    return (
+        "🔥 <b>ACHADINHO DO DIA!</b>\n\n"
+        f"🛍️ <b>{name}</b>\n\n"
+        f"💰 <b>Preço:</b> {price}\n\n"
+        f"👉 <a href=\"{link}\">Ver na Shopee</a>\n\n"
+        "👑 <b>Axadinhos Vippe</b>\n<i>Se é útil, é achadinho!</i>"
+    )
+
+
+def load(token: str, session=requests) -> tuple[pd.DataFrame, str]:
+    url = f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{PATH}?ref={BRANCH}"
+    response = session.get(url, headers=headers(token), timeout=20)
+    response.raise_for_status()
+    payload = response.json()
+    raw = base64.b64decode(payload["content"]).decode("utf-8-sig")
+    return pd.read_csv(io.StringIO(raw)), payload["sha"]
+
+
+def save(token: str, df: pd.DataFrame, sha: str, session=requests) -> None:
+    if not sha:
+        raise ValueError("O SHA do CSV é obrigatório para evitar sobrescrever dados inesperadamente.")
+    raw = df.to_csv(index=False).encode("utf-8")
+    body = {
+        "message": "Publicação automática Axadinhos Vippe",
+        "content": base64.b64encode(raw).decode("ascii"),
+        "branch": BRANCH,
+        "sha": sha,
+    }
+    url = f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{PATH}"
+    response = session.put(url, headers=headers(token), json=body, timeout=30)
+    response.raise_for_status()
+
+
+def send_telegram(row: Any, token: str, chat_id: str, session=requests) -> dict[str, Any]:
+    if not token or not chat_id:
+        raise ValueError("Defina TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID antes de publicar.")
+    base = f"https://api.telegram.org/bot{token}"
+    image = _display(row.get("imagem_url"))
+    if image:
+        response = session.post(
+            f"{base}/sendPhoto",
+            data={"chat_id": chat_id, "photo": image, "caption": ad(row), "parse_mode": "HTML"},
+            timeout=30,
+        )
+    else:
+        response = session.post(
+            f"{base}/sendMessage",
+            data={"chat_id": chat_id, "text": ad(row), "parse_mode": "HTML", "disable_web_page_preview": "false"},
+            timeout=30,
+        )
+    response.raise_for_status()
+    result = response.json()
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram recusou a publicação: {result.get('description', 'erro sem descrição')}")
+    return result
+
+
+def main(environ=os.environ, session=requests) -> int:
+    token = environ.get("GH_AUTOMATION_TOKEN") or environ.get("GITHUB_TOKEN")
+    telegram_token = environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = environ.get("TELEGRAM_CHAT_ID")
+    missing = [
+        name for name, value in (
+            ("GH_AUTOMATION_TOKEN ou GITHUB_TOKEN", token),
+            ("TELEGRAM_BOT_TOKEN", telegram_token),
+            ("TELEGRAM_CHAT_ID", chat_id),
+        ) if not value
+    ]
+    if missing:
+        raise RuntimeError("Secrets/variáveis ausentes: " + ", ".join(missing))
+
+    df, sha = load(token, session)
+    now = datetime.now(timezone.utc)
+    candidate = select_candidate(df, now)
+    if candidate is None:
+        print("Nenhum produto ativo e vencido para publicação.")
+        return 0
+
+    index, row = candidate
+    # Só atualiza a base depois de o Telegram confirmar sucesso.
+    send_telegram(row, telegram_token, chat_id, session)
+    frequency = publication_frequency(row)
+    df.at[index, "ultima_publicacao"] = now.isoformat()
+    df.at[index, "frequencia_dias"] = frequency
+    df.at[index, "proxima_publicacao"] = (now + timedelta(days=frequency)).isoformat()
+    save(token, df, sha, session)
+    print(f"Publicado: {_display(row.get('nome'), 'produto sem nome')} | próxima em {frequency} dias")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        raise SystemExit(f"Falha na publicação: {exc}") from exc
