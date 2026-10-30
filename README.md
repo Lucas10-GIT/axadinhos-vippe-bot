@@ -9,7 +9,8 @@ Aplicativo Streamlit para manter uma lista de produtos, gerar textos de divulga�
 - geração de texto para divulgação;
 - envio manual de uma mensagem de teste pela aba Telegram;
 - publicador reutilizável em `publish_telegram.py`;
-- testes automatizados sem tokens ou envio real, executados pelo GitHub Actions.
+- testes automatizados sem tokens ou envio real, executados pelo GitHub Actions;
+- smoke test real do Telegram acionado manualmente, com confirmação explícita.
 
 A seleção de produtos usa os cliques, pedidos e comissões preenchidos na planilha. O bot não busca métricas de vendas da Shopee automaticamente.
 
@@ -45,6 +46,18 @@ O script `publish_telegram.py` só executa quando chamado diretamente; importá-
 - `TELEGRAM_CHAT_ID`.
 
 Nunca inclua tokens no código, em arquivos `.csv`, em commits ou em logs. O envio atualiza a data de publicação no CSV somente após o Telegram confirmar sucesso.
+
+## Teste real de envio via GitHub Actions
+
+Os secrets de repositório `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` já estão configurados. O workflow `.github/workflows/telegram-smoke-test.yml` usa esses secrets somente quando acionado manualmente na branch `main`; não roda em push nem em pull request. Não é necessário inserir os valores dos tokens no workflow ou no código.
+
+Para iniciar: abra **Actions → Teste real de envio Telegram → Run workflow**, selecione `main` e marque `confirm_send`. Isso envia uma única mensagem silenciosa (`disable_notification`) ao destino guardado em `TELEGRAM_CHAT_ID`. O teste não publica produto, não chama `publish_telegram.py` e não modifica `data/products.csv`. O `GH_AUTOMATION_TOKEN` não é usado por esse smoke test.
+
+Texto enviado:
+
+> TESTE TÉCNICO — Axadinhos Vippe  
+> Mensagem de validação enviada pelo GitHub Actions.  
+> Este não é um anúncio de produto.
 
 ## Publicação automática
 
