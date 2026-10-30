@@ -6,6 +6,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from publish_telegram import ad as telegram_ad, parse_bool
+from spreadsheet_exports import build_exports
 
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
@@ -180,12 +181,18 @@ with products:
         (st.success if ok else st.error)(message)
         if ok:
             st.rerun()
-    st.download_button(
-        "⬇️ Baixar CSV",
-        edited.to_csv(index=False).encode("utf-8"),
-        "axadinhos_vippe_produtos.csv",
-        "text/csv",
-    )
+    st.caption("Baixe a tabela nos formatos CSV, Excel, TSV ou JSON.")
+    exports = build_exports(clean(edited))
+    download_columns = st.columns(len(exports))
+    for column, (format_name, export) in zip(download_columns, exports.items()):
+        column.download_button(
+            f"⬇️ {format_name}",
+            data=export["data"],
+            file_name=export["file_name"],
+            mime=export["mime"],
+            key=f"download_products_{format_name.casefold()}",
+            use_container_width=True,
+        )
 
 with ads:
     if len(df):
