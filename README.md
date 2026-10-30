@@ -1,47 +1,51 @@
-# Axadinhos Vippe Bot V2
+# Axadinhos Vippe Bot
 
-Este projeto adiciona:
+Aplicativo Streamlit para manter uma lista de produtos, gerar textos de divulgação e, quando configurado, enviar uma publicação ao Telegram. Os dados são armazenados em `data/products.csv` no GitHub.
 
-- planilha editável dentro do Streamlit;
-- banco persistente em `data/products.csv` no GitHub;
-- link direto da imagem do produto;
-- geração de anúncios;
-- envio para Telegram;
-- agendamento via GitHub Actions;
-- regra inicial de repetição para produtos vencedores.
+## O que está pronto
 
-## Secrets
+- cadastro e edição de produtos pelo Streamlit;
+- persistência da planilha no arquivo `data/products.csv`;
+- geração de texto para divulgação;
+- envio manual de uma mensagem de teste pela aba Telegram;
+- publicador reutilizável em `publish_telegram.py`;
+- testes automatizados sem tokens ou envio real, executados pelo GitHub Actions.
 
-No Streamlit Cloud, configure:
+A seleção de produtos usa os cliques, pedidos e comissões preenchidos na planilha. O bot não busca métricas de vendas da Shopee automaticamente.
 
-- `github_token`
-- `telegram_bot_token`
-- `telegram_chat_id`
+## Primeiro teste automatizado
 
-Para o GitHub Actions, configure:
+Os testes locais não precisam de tokens e não enviam mensagens. Com Python 3.12 ou compatível:
 
-- `GH_AUTOMATION_TOKEN`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+```bash
+python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q
+```
 
-Nunca coloque tokens no código ou no CSV.
+O GitHub Actions também executa os testes em push para `main`, pull requests e acionamento manual. O workflow de testes tem apenas permissão de leitura do repositório e não publica no Telegram.
 
-## Importante sobre "produto vencedor"
+## Configuração do Streamlit
 
-A primeira versão usa cliques, pedidos e comissão que estejam registrados na planilha.
-Ela não consegue adivinhar vendas da Shopee sem uma fonte oficial de métricas/API.
-Quando tivermos acesso aos relatórios/API de afiliados, substituímos os campos manuais pela coleta automática.
+Configure estes valores em **Streamlit Cloud → App settings → Secrets**:
 
-## Agendamento
+```toml
+github_token = "TOKEN_COM_ACESSO_AO_CONTEUDO_DO_REPOSITORIO"
+telegram_bot_token = "TOKEN_DO_BOT"
+telegram_chat_id = "ID_DO_CHAT_OU_CANAL"
+```
 
-O GitHub Actions verifica a cada 6 horas se algum produto está vencido.
-A frequência é adaptada:
-- vencedor: 2 dias;
-- em teste: 4 dias;
-- novo: 3 dias.
+O `github_token` precisa de permissão para ler e gravar `data/products.csv`. Sem ele, o aplicativo abre com uma lista vazia e não consegue persistir alterações. Para o envio, adicione o bot ao grupo/canal e conceda as permissões necessárias.
 
-Isso é uma regra inicial e pode ser ajustada depois com dados reais.
+## Publicador e segredos
 
-## Telegram
+O script `publish_telegram.py` só executa quando chamado diretamente; importá-lo em testes não faz chamadas de rede. Para execução real, configure:
 
-Crie o bot pelo @BotFather, adicione-o ao canal/grupo e use o chat ID correspondente.
+- `GH_AUTOMATION_TOKEN` (preferido) ou `GITHUB_TOKEN`, com acesso de gravação ao conteúdo do repositório;
+- `TELEGRAM_BOT_TOKEN`;
+- `TELEGRAM_CHAT_ID`.
+
+Nunca inclua tokens no código, em arquivos `.csv`, em commits ou em logs. O envio atualiza a data de publicação no CSV somente após o Telegram confirmar sucesso.
+
+## Publicação automática
+
+Nenhuma publicação agendada está habilitada por padrão. Antes de ativar um agendamento ou enviar uma mensagem real, valide o chat de destino e o produto que será divulgado. Frequência inicial do publicador: produto vencedor (2 ou mais pedidos), a cada 2 dias; produto em teste (10 ou mais cliques), a cada 4 dias; demais produtos, a cada 3 dias.
