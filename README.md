@@ -14,6 +14,7 @@ Aplicativo Streamlit para manter uma lista de produtos, gerar textos de divulga�
 Cliques, pedidos e comissão estimada são informados manualmente no CSV; o bot não importa métricas da Shopee. O workflow automático envia no máximo uma oferta por dia e as publicações usam as notificações normais do Telegram.
 
 O CSV está inicialmente vazio (apenas o cabeçalho). Cadastre ofertas reais no aplicativo e revise nome, preço, link, imagem e métricas. A aprovação é individual; itens novos não são publicados até marcar **Aprovado para publicação**.
+Na aba **Produtos**, baixe a tabela atual como CSV, Excel (`.xlsx`), TSV ou JSON.
 
 ## Agendamento e ativação
 
