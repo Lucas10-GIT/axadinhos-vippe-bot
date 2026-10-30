@@ -1,33 +1,31 @@
 # Axadinhos Vippe Bot
 
-Aplicativo Streamlit para manter uma lista de produtos, gerar textos de divulgação e, quando configurado, enviar uma publicação ao Telegram. Os dados são armazenados em `data/products.csv` no GitHub.
+Aplicativo Streamlit para manter uma lista de produtos, gerar textos de divulgação e publicar ofertas aprovadas no Telegram. A base vive em `data/products.csv` no GitHub.
 
-## O que está pronto
+## Estado da automação
 
-- cadastro e edição de produtos pelo Streamlit;
-- persistência da planilha no arquivo `data/products.csv`;
-- geração de texto para divulgação;
-- envio manual de uma mensagem de teste pela aba Telegram;
-- publicador reutilizável em `publish_telegram.py`;
-- testes automatizados sem tokens ou envio real, executados pelo GitHub Actions;
-- smoke test real do Telegram acionado manualmente, com confirmação explícita.
+- O publicador lê o CSV, valida cada produto e escolhe no máximo uma oferta elegível por execução.
+- Um produto precisa estar **Ativo** e com **Aprovado para publicação** marcado, ter nome, preço e link HTTPS da Shopee, estar vencido pela frequência e não estar em estado de revisão.
+- O produto de maior score entre os elegíveis é selecionado. O score usa pedidos, comissão estimada e conversão de cliques.
+- Frequência inicial após envio: produto com 2 ou mais pedidos, 2 dias; produto com 10 ou mais cliques, 4 dias; demais, 3 dias.
+- Cada anúncio informa que o link é de afiliado e que preço/disponibilidade podem mudar na Shopee.
+- Antes de chamar o Telegram, o publicador grava `status_publicacao=enviando` no CSV. Se o envio tiver resultado ambíguo ou a gravação final falhar, a oferta fica bloqueada para evitar repetição automática; verifique o canal antes de mudar o estado para `pronto`.
 
-A seleção de produtos usa os cliques, pedidos e comissões preenchidos na planilha. O bot não busca métricas de vendas da Shopee automaticamente.
+Cliques, pedidos e comissão estimada são informados manualmente no CSV; o bot não importa métricas da Shopee. O workflow automático envia no máximo uma oferta por dia e as publicações usam as notificações normais do Telegram.
 
-## Primeiro teste automatizado
+O CSV está inicialmente vazio (apenas o cabeçalho). Cadastre ofertas reais no aplicativo e revise nome, preço, link, imagem e métricas. A aprovação é individual; itens novos não são publicados até marcar **Aprovado para publicação**.
 
-Os testes locais não precisam de tokens e não enviam mensagens. Com Python 3.12 ou compatível:
+## Agendamento e ativação
 
-```bash
-python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q
-```
+O workflow `.github/workflows/publish-offers.yml` faz uma varredura diária às **13:00 no horário de Brasília (UTC-3)** e publica no máximo uma oferta vencida. O agendamento fica **desativado por padrão**: só publica se a Actions Variable `AXADINHOS_AUTO_PUBLISH` estiver definida como `true`. Enquanto a variável estiver ausente ou diferente de `true`, os disparos agendados não executam o job de publicação.
 
-O GitHub Actions também executa os testes em push para `main`, pull requests e acionamento manual. O workflow de testes tem apenas permissão de leitura do repositório e não publica no Telegram.
+A execução manual também exige marcar `confirm_publish` no formulário de Actions. Não acione essa opção até haver produtos reais revisados no CSV e o destino Telegram confirmado. Para ativar a rotina recorrente, configure conscientemente a variável de repositório em **Settings → Secrets and variables → Actions → Variables → New repository variable**, com nome `AXADINHOS_AUTO_PUBLISH` e valor `true`. Não habilite a variável antes de cadastrar e revisar ao menos uma oferta aprovada.
+
+O workflow usa o `GITHUB_TOKEN` de curta duração do próprio run com permissão de gravação apenas no job de publicação e os secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. Não coloque tokens no CSV, no código, em commits ou em logs. Erros do publicador redigem os tokens antes de serem impressos.
 
 ## Configuração do Streamlit
 
-Configure estes valores em **Streamlit Cloud → App settings → Secrets**:
+Em **Streamlit Cloud → App settings → Secrets**, configure:
 
 ```toml
 github_token = "TOKEN_COM_ACESSO_AO_CONTEUDO_DO_REPOSITORIO"
@@ -35,30 +33,15 @@ telegram_bot_token = "TOKEN_DO_BOT"
 telegram_chat_id = "ID_DO_CHAT_OU_CANAL"
 ```
 
-O `github_token` precisa de permissão para ler e gravar `data/products.csv`. Sem ele, o aplicativo abre com uma lista vazia e não consegue persistir alterações. Para o envio, adicione o bot ao grupo/canal e conceda as permissões necessárias.
+O `github_token` precisa ler e gravar `data/products.csv`. O bot do Telegram precisa ter permissão para publicar no canal. Não compartilhe os valores dos secrets.
 
-## Publicador e segredos
+## Testes
 
-O script `publish_telegram.py` só executa quando chamado diretamente; importá-lo em testes não faz chamadas de rede. Para execução real, configure:
+Os testes locais não precisam de tokens e não fazem chamadas reais:
 
-- `GH_AUTOMATION_TOKEN` (preferido) ou `GITHUB_TOKEN`, com acesso de gravação ao conteúdo do repositório;
-- `TELEGRAM_BOT_TOKEN`;
-- `TELEGRAM_CHAT_ID`.
+```bash
+python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q
+```
 
-Nunca inclua tokens no código, em arquivos `.csv`, em commits ou em logs. O envio atualiza a data de publicação no CSV somente após o Telegram confirmar sucesso.
-
-## Teste real de envio via GitHub Actions
-
-Os secrets de repositório `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` já estão configurados. O workflow `.github/workflows/telegram-smoke-test.yml` usa esses secrets somente quando acionado manualmente na branch `main`; não roda em push nem em pull request. Não é necessário inserir os valores dos tokens no workflow ou no código.
-
-Para iniciar: abra **Actions → Teste real de envio Telegram → Run workflow**, selecione `main` e marque `confirm_send`. Isso envia uma única mensagem silenciosa (`disable_notification`) ao destino guardado em `TELEGRAM_CHAT_ID`. O teste não publica produto, não chama `publish_telegram.py` e não modifica `data/products.csv`. O `GH_AUTOMATION_TOKEN` não é usado por esse smoke test.
-
-Texto enviado:
-
-> TESTE TÉCNICO — Axadinhos Vippe  
-> Mensagem de validação enviada pelo GitHub Actions.  
-> Este não é um anúncio de produto.
-
-## Publicação automática
-
-Nenhuma publicação agendada está habilitada por padrão. Antes de ativar um agendamento ou enviar uma mensagem real, valide o chat de destino e o produto que será divulgado. Frequência inicial do publicador: produto vencedor (2 ou mais pedidos), a cada 2 dias; produto em teste (10 ou mais cliques), a cada 4 dias; demais produtos, a cada 3 dias.
+O workflow `Tests` também roda nos pushes/pull requests e não publica no Telegram. O smoke test técnico de uma única mensagem permanece separado em `.github/workflows/telegram-smoke-test.yml`.
