@@ -1,0 +1,51 @@
+name: Publicar ofertas aprovadas
+
+on:
+  # Varredura diária às 13:00 no horário de Brasília (UTC-3).
+  # Permanece inativa até AXADINHOS_AUTO_PUBLISH=true nas Actions Variables.
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: "Confirme para publicar uma oferta aprovada no canal Telegram."
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: axadinhos-publish-offers
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Processar CSV e publicar no máximo uma oferta
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        ((github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true') ||
+         (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependências
+        run: python -m pip install -r requirements.txt
+      - name: Publicar uma oferta elegível
+        run: python publish_telegram.py
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PUBLISH_CONFIRMED: ${{ (github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true') || (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true) }}
