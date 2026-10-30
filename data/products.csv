@@ -1,1 +1,1 @@
-id,nome,preco,link,imagem_url,categoria,comissao,ativo,frequencia_dias,cliques,pedidos,comissao_estimada,ultima_publicacao,proxima_publicacao
+id,nome,preco,link,imagem_url,categoria,comissao,ativo,aprovado_publicacao,status_publicacao,frequencia_dias,cliques,pedidos,comissao_estimada,ultima_publicacao,proxima_publicacao,ultima_tentativa,telegram_message_id
