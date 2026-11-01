@@ -1,10 +1,12 @@
 import base64
+import hmac
 import io
 
 import pandas as pd
 import requests
 import streamlit as st
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
+from shopee_affiliate_api import ShopeeAffiliateAPIError, check_connection as test_shopee_affiliate_api_connection
 from publish_telegram import _redact as redact_secrets, ad as telegram_ad, main as publish_offer, parse_bool
 from spreadsheet_exports import build_exports
 
@@ -181,6 +183,48 @@ with products:
         f"{MAX_LINKS_PER_BATCH} links por lote."
     )
 
+    api_app_id = secret("shopee_affiliate_app_id")
+    api_secret = secret("shopee_affiliate_secret")
+    api_admin_pin = secret("shopee_affiliate_admin_pin")
+    if not api_app_id or not api_secret or not api_admin_pin:
+        st.session_state["shopee_affiliate_api_connected"] = False
+    with st.expander("🔗 Conectar API de Afiliados Shopee", expanded=False):
+        if not api_app_id or not api_secret or not api_admin_pin:
+            st.info(
+                "Configure os dados abaixo em Manage app → Settings → Secrets no Streamlit Cloud. "
+                "O PIN protege as credenciais privadas porque o painel é público. Não os insira na planilha nem no código."
+            )
+            st.code(
+                'shopee_affiliate_app_id = "SEU_APP_ID"\n'
+                'shopee_affiliate_secret = "SUA_SECRET"\n'
+                'shopee_affiliate_admin_pin = "ESCOLHA_UM_PIN_LONGO_E_PRIVADO"',
+                language="toml",
+            )
+        else:
+            api_pin_input = st.text_input(
+                "PIN administrativo da API",
+                type="password",
+                key="shopee_affiliate_admin_pin_input",
+            )
+            st.caption("Credenciais localizadas nos Secrets. O teste abaixo faz apenas uma consulta de leitura.")
+            if st.button("🔌 Conectar / testar API", key="test_shopee_affiliate_api"):
+                if not hmac.compare_digest(str(api_pin_input), str(api_admin_pin)):
+                    st.session_state["shopee_affiliate_api_connected"] = False
+                    st.session_state["shopee_affiliate_api_error"] = "PIN administrativo incorreto."
+                else:
+                    try:
+                        test_shopee_affiliate_api_connection(str(api_app_id), str(api_secret))
+                        st.session_state["shopee_affiliate_api_connected"] = True
+                        st.session_state["shopee_affiliate_api_message"] = "Conexão validada. A próxima importação usará a API quando o itemId for identificável."
+                        st.session_state.pop("shopee_affiliate_api_error", None)
+                    except ShopeeAffiliateAPIError as exc:
+                        st.session_state["shopee_affiliate_api_connected"] = False
+                        st.session_state["shopee_affiliate_api_error"] = str(exc)
+            if st.session_state.get("shopee_affiliate_api_connected"):
+                st.success(st.session_state.get("shopee_affiliate_api_message", "API conectada."))
+            if st.session_state.get("shopee_affiliate_api_error"):
+                st.error(st.session_state["shopee_affiliate_api_error"])
+
     editor_key = f"products_editor_{st.session_state['products_editor_version']}"
     working_df = clean(st.session_state["products_working_df"])
     edited = st.data_editor(
@@ -214,7 +258,15 @@ with products:
         import_submitted = st.form_submit_button("🔎 Buscar dados e adicionar à tabela")
 
     if import_submitted:
-        result = import_product_links(pasted_links, existing_links=edited["link"].tolist())
+        api_connected = st.session_state.get("shopee_affiliate_api_connected", False)
+        api_credentials = (
+            (str(api_app_id), str(api_secret)) if api_connected and api_app_id and api_secret else None
+        )
+        result = import_product_links(
+            pasted_links,
+            existing_links=edited["link"].tolist(),
+            affiliate_api_credentials=api_credentials,
+        )
         if result["products"]:
             additions = pd.DataFrame(result["products"])
             combined = pd.concat([edited, additions], ignore_index=True)
@@ -276,6 +328,8 @@ with products:
                     status_text = status_labels.get(status, f"Resposta da página: {status}")
                     st.markdown(f"**{item['link']}**")
                     st.caption(status_text)
+                    if item.get("api_used"):
+                        st.caption("Dados enriquecidos pela Shopee Affiliate Open API.")
                     found = [labels[field] for field in item.get("extraidos", [])]
                     missing = [labels[field] for field in item.get("faltando", [])]
                     if found:
@@ -283,7 +337,7 @@ with products:
                     if missing:
                         st.warning("Faltando na tabela: " + ", ".join(missing))
                 st.info(
-                    "A importação lê HTML e dados JSON/estado embutidos na resposta pública, mas não executa "
+                    "A importação lê HTML e dados JSON/estado embutido na resposta pública, mas não executa "
                     "JavaScript nem contorna login, CAPTCHA ou bloqueios. Se a Shopee montar os dados apenas "
                     "após chamadas do navegador, nome/preço podem não estar no código-fonte recebido; use o "
                     "link direto do produto e preencha manualmente os campos que continuarem vazios. "
