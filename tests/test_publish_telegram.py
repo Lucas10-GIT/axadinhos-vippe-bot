@@ -272,7 +272,7 @@ def test_error_message_redacts_tokens():
     assert bot._redact("failure telegram-secret", "telegram-secret") == "failure [REDACTED]"
 
 
-def test_main_skips_all_candidates_until_global_four_hour_cooldown_expires(capsys):
+def test_manual_publication_raises_during_global_four_hour_cooldown():
     recent = (NOW - pd.Timedelta(hours=3)).isoformat()
     frame = pd.DataFrame([
         approved_product(id=1, status_publicacao="enviado", ultima_publicacao=recent),
@@ -286,6 +286,6 @@ def test_main_skips_all_candidates_until_global_four_hour_cooldown_expires(capsy
         "TELEGRAM_CHAT_ID": "channel-test",
     }
 
-    assert bot.main(environ=env, session=session, now=NOW, product_id=2) == 0
+    with pytest.raises(RuntimeError, match="intervalo global mínimo de quatro horas"):
+        bot.main(environ=env, session=session, now=NOW, product_id=2)
     assert session.events == ["get"]
-    assert "intervalo global mínimo de quatro horas" in capsys.readouterr().out
