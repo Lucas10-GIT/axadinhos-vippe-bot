@@ -40,6 +40,7 @@ HTML = '''
 <meta property="og:image" content="https://down-br.img.susercontent.com/product.jpg">
 <meta property="product:price:amount" content="78.90">
 <meta property="product:price:currency" content="BRL">
+<meta property="product:category" content="Casa e Cozinha">
 </head></html>
 '''
 
@@ -84,6 +85,52 @@ def test_parse_open_graph_metadata_and_brazilian_price():
         "nome": "Kit de Cozinha",
         "preco": "R$ 78,90",
         "imagem_url": "https://down-br.img.susercontent.com/product.jpg",
+        "categoria": "Casa e Cozinha",
+        "status_metadados": "completo",
+    }
+
+
+def test_parse_itemprop_metadata_and_jsonld_category():
+    html = '''<html><head>
+      <meta itemprop="name" content="Produto por schema">
+      <meta itemprop="price" content="42.50">
+      <meta itemprop="image" content="/img/produto.jpg">
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"Product","category":"Organização"}
+      </script>
+    </head></html>'''
+    metadata = parse_product_metadata(html)
+    assert metadata["nome"] == "Produto por schema"
+    assert metadata["preco"] == "R$ 42,50"
+    assert metadata["imagem_url"] == "/img/produto.jpg"
+    assert metadata["categoria"] == "Organização"
+    assert metadata["status_metadados"] == "completo"
+
+
+def test_parse_json_state_product_data_when_open_graph_is_missing():
+    html = '''<script id="__NEXT_DATA__" type="application/json">
+    {"props":{"pageProps":{"product":{"@type":"Product","name":"Produto do estado",
+     "image":["https://img.example/produto.jpg"],"category":{"name":"Casa"},
+     "offers":{"price":"45.50","priceCurrency":"BRL"}}}}}
+    </script>'''
+    metadata = parse_product_metadata(html)
+    assert metadata["nome"] == "Produto do estado"
+    assert metadata["preco"] == "R$ 45,50"
+    assert metadata["imagem_url"] == "https://img.example/produto.jpg"
+    assert metadata["categoria"] == "Casa"
+    assert metadata["status_metadados"] == "completo"
+
+
+def test_parse_product_metadata_marks_missing_fields_for_javascript_only_page():
+    html = '''<!doctype html><html><head><script>window.__APP_ID__ = 12;</script></head>
+    <body><div id="root"></div></body></html>'''
+    metadata = parse_product_metadata(html)
+    assert metadata == {
+        "nome": "",
+        "preco": "",
+        "imagem_url": "",
+        "categoria": "",
+        "status_metadados": "indisponivel",
     }
 
 
@@ -109,6 +156,7 @@ def test_fetch_follows_only_allowlisted_redirects_and_resolves_image_urls():
     assert len(session.calls) == 2
     assert metadata["nome"] == "Kit de Cozinha"
     assert metadata["imagem_url"] == "https://down-br.img.susercontent.com/product.jpg"
+    assert metadata["status_metadados"] == "completo"
 
 
 def test_fetch_does_not_follow_redirect_outside_shopee():
@@ -117,8 +165,19 @@ def test_fetch_does_not_follow_redirect_outside_shopee():
         short: FakeResponse(302, {"Location": "https://example.com/collect"}),
     })
     metadata = fetch_product_metadata(short, session)
-    assert metadata == {"nome": "", "preco": "", "imagem_url": ""}
+    assert metadata["status_metadados"] == "redirecionamento_bloqueado"
+    assert metadata["nome"] == ""
     assert len(session.calls) == 1
+
+
+def test_fetch_reports_non_success_http_status_without_exposing_response_body():
+    short = "https://shope.ee/blocked"
+    session = FakeSession({
+        short: FakeResponse(403, {"Content-Type": "text/html"}, "private challenge contents"),
+    })
+    metadata = fetch_product_metadata(short, session)
+    assert metadata["status_metadados"] == "http_403"
+    assert metadata["nome"] == ""
 
 
 def test_import_preserves_affiliate_link_and_never_approves_or_activates():
@@ -130,9 +189,33 @@ def test_import_preserves_affiliate_link_and_never_approves_or_activates():
     assert row["link"] == link
     assert row["nome"] == "Kit de Cozinha"
     assert row["preco"] == "R$ 78,90"
+    assert row["categoria"] == "Casa e Cozinha"
     assert row["ativo"] is False
     assert row["aprovado_publicacao"] is False
     assert row["status_publicacao"] == "pronto"
+    assert result["diagnostics"][0]["status"] == "completo"
+    assert result["diagnostics"][0]["faltando"] == []
+
+
+def test_import_reports_each_missing_field_for_javascript_rendered_page():
+    link = "https://shopee.com.br/item/1"
+    session = FakeSession({link: FakeResponse(
+        200,
+        {"Content-Type": "text/html"},
+        '<html><body><div id="root"></div><script>window.__APP_ID__=12</script></body></html>',
+    )})
+    result = import_product_links(link, session=session)
+    assert result["incomplete"] == [link]
+    assert result["diagnostics"] == [{
+        "link": link,
+        "status": "indisponivel",
+        "extraidos": [],
+        "faltando": ["nome", "preco", "imagem_url", "categoria"],
+    }]
+    assert result["products"][0]["nome"] == ""
+    assert result["products"][0]["preco"] == ""
+    assert result["products"][0]["ativo"] is False
+    assert result["products"][0]["aprovado_publicacao"] is False
 
 
 def test_import_reports_duplicates_and_rejects_other_marketplaces_without_fetching():
