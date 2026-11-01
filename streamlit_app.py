@@ -1,10 +1,10 @@
 import base64
 import io
-import os
 
 import pandas as pd
 import requests
 import streamlit as st
+from product_importer import MAX_LINKS_PER_BATCH, import_product_links
 from publish_telegram import ad as telegram_ad, parse_bool
 from spreadsheet_exports import build_exports
 
@@ -122,8 +122,24 @@ def classify(row):
 
 df, sha, cloud = load()
 
+# Keep edits/import drafts between Streamlit reruns, but reload if the GitHub
+# blob SHA changes so a scheduled publisher cannot be overwritten by a stale UI.
+if "products_base_sha" not in st.session_state:
+    st.session_state["products_base_sha"] = sha
+    st.session_state["products_working_df"] = df.copy()
+    st.session_state["products_editor_version"] = 0
+elif st.session_state["products_base_sha"] != sha:
+    st.session_state["products_base_sha"] = sha
+    st.session_state["products_working_df"] = df.copy()
+    st.session_state["products_editor_version"] += 1
+    st.session_state["products_remote_refresh"] = True
+
 st.title("👑 Axadinhos Vippe")
 st.caption("Produtos, aprovação de ofertas, anúncios e desempenho")
+if st.session_state.pop("products_remote_refresh", False):
+    st.warning("A base mudou no GitHub. Recarregamos os dados mais recentes para evitar sobrescrever atualizações.")
+if not cloud:
+    st.warning("A visualização está disponível, mas github_token precisa estar configurado para salvar produtos.")
 
 panel, products, ads, telegram = st.tabs(["📊 Painel", "📋 Produtos", "📢 Anúncios", "📲 Telegram"])
 
@@ -155,14 +171,24 @@ with panel:
 with products:
     st.subheader("📋 Planilha de produtos")
     st.caption(
-        "Cadastre ofertas reais; confira preço, destino Shopee e foto. "
-        "Novos produtos não são publicados até você marcar a aprovação."
+        "Cole links HTTPS da Shopee em lote. O importador tenta ler título, preço e foto "
+        "dos metadados públicos; se a Shopee bloquear ou omitir dados, revise e preencha a tabela. "
+        "Links originais de afiliado são preservados."
     )
+    st.info(
+        "Importações novas entram como inativas e sem aprovação. Confira nome, preço, imagem e destino; "
+        "ative e aprove cada produto somente depois da revisão. Máximo de "
+        f"{MAX_LINKS_PER_BATCH} links por lote."
+    )
+
+    editor_key = f"products_editor_{st.session_state['products_editor_version']}"
+    working_df = clean(st.session_state["products_working_df"])
     edited = st.data_editor(
-        df,
+        working_df,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
+        key=editor_key,
         column_config={
             "link": st.column_config.LinkColumn("Link Shopee"),
             "imagem_url": st.column_config.LinkColumn("Link da foto"),
@@ -176,11 +202,70 @@ with products:
         },
         disabled=["id", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "telegram_message_id"],
     )
+    edited = clean(edited)
+    st.session_state["products_working_df"] = edited
+
+    with st.form("bulk_import_form", clear_on_submit=True):
+        pasted_links = st.text_area(
+            "Links da Shopee (um por linha ou separados por espaço/vírgula)",
+            height=150,
+            placeholder="https://s.shopee.com.br/...\nhttps://shp.ee/...",
+        )
+        import_submitted = st.form_submit_button("🔎 Buscar dados e adicionar à tabela")
+
+    if import_submitted:
+        result = import_product_links(pasted_links, existing_links=edited["link"].tolist())
+        if result["products"]:
+            additions = pd.DataFrame(result["products"])
+            combined = pd.concat([edited, additions], ignore_index=True)
+            st.session_state["products_working_df"] = clean(combined)
+            st.session_state["products_editor_version"] += 1
+            st.session_state["bulk_import_report"] = {
+                "added": len(result["products"]),
+                "duplicates": result["duplicates"],
+                "invalid": result["invalid"],
+                "incomplete": result["incomplete"],
+                "limit_reached": result["limit_reached"],
+            }
+            st.rerun()
+        else:
+            if not pasted_links.strip():
+                st.warning("Cole pelo menos um link para importar.")
+            elif result["duplicates"] or result["invalid"]:
+                st.warning(
+                    f"Nenhum produto novo adicionado. Duplicados: {len(result['duplicates'])}; "
+                    f"links que não são HTTPS da Shopee: {len(result['invalid'])}."
+                )
+            else:
+                st.warning("Nenhum link Shopee novo foi encontrado no lote.")
+            if result["invalid"]:
+                st.caption("Links ignorados por domínio/formato:")
+                st.code("\n".join(result["invalid"][:10]))
+
+    report = st.session_state.pop("bulk_import_report", None)
+    if report:
+        st.success(
+            f"{report['added']} produto(s) adicionado(s) à tabela como inativos e não aprovados. "
+            "Revise os dados e clique em Salvar produtos quando estiver pronto."
+        )
+        if report["incomplete"]:
+            st.warning(
+                f"Metadados incompletos em {len(report['incomplete'])} link(s); preencha nome e preço manualmente antes de aprovar."
+            )
+        if report["duplicates"]:
+            st.info(f"{len(report['duplicates'])} link(s) duplicado(s) foram ignorados.")
+        if report["invalid"]:
+            st.warning(f"{len(report['invalid'])} link(s) que não são Shopee foram ignorados.")
+            st.code("\n".join(report["invalid"][:10]))
+        if report["limit_reached"]:
+            st.info(f"O lote foi limitado a {MAX_LINKS_PER_BATCH} links. Envie o restante em outro lote.")
+
     if st.button("💾 Salvar produtos", type="primary"):
         ok, message = save(edited, sha)
         (st.success if ok else st.error)(message)
         if ok:
             st.rerun()
+
     st.caption("Baixe a tabela nos formatos CSV, Excel, TSV ou JSON.")
     exports = build_exports(clean(edited))
     download_columns = st.columns(len(exports))
@@ -210,7 +295,13 @@ with telegram:
     if len(df):
         selected_name = st.selectbox("Produto para teste", df["nome"].tolist(), key="telegram_test")
         selected_row = df[df["nome"] == selected_name].iloc[0]
-        if st.button("🚀 Enviar teste agora"):
+        can_send_test = (
+            parse_bool(selected_row.get("ativo", True), default=True)
+            and parse_bool(selected_row.get("aprovado_publicacao", False), default=False)
+        )
+        if not can_send_test:
+            st.warning("O teste de envio fica bloqueado: ative e aprove este produto primeiro.")
+        if st.button("🚀 Enviar teste agora", disabled=not can_send_test):
             token = secret("telegram_bot_token")
             chat_id = secret("telegram_chat_id")
             if not token or not chat_id:
