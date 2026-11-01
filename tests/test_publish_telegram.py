@@ -222,6 +222,28 @@ def test_main_reserves_product_before_send_and_marks_sent_after_success(capsys):
     assert "Publicado: Produto de teste" in capsys.readouterr().out
 
 
+def test_manual_publication_targets_selected_product_and_persists_status(capsys):
+    frame = pd.DataFrame([
+        approved_product(id=1, nome="Oferta um"),
+        approved_product(id=2, nome="Oferta escolhida"),
+    ])
+    session = FakeGitHubTelegramSession(frame)
+    env = {
+        "PUBLISH_CONFIRMED": "true",
+        "GITHUB_TOKEN": "github-test-token",
+        "TELEGRAM_BOT_TOKEN": "telegram-test-token",
+        "TELEGRAM_CHAT_ID": "channel-test",
+    }
+
+    assert bot.main(environ=env, session=session, now=NOW, product_id=2) == 0
+    final = session.put_frames[-1]
+    assert final.loc[0, "status_publicacao"] == "pronto"
+    assert final.loc[1, "status_publicacao"] == "enviado"
+    assert final.loc[1, "ultima_publicacao"] == NOW.isoformat()
+    assert session.events.count("post") == 1
+    assert "Publicado: Oferta escolhida" in capsys.readouterr().out
+
+
 def test_failed_or_ambiguous_send_is_marked_for_review_and_not_retried():
     frame = pd.DataFrame([approved_product()])
     session = FakeGitHubTelegramSession(frame, telegram_result={
@@ -264,6 +286,6 @@ def test_main_skips_all_candidates_until_global_four_hour_cooldown_expires(capsy
         "TELEGRAM_CHAT_ID": "channel-test",
     }
 
-    assert bot.main(environ=env, session=session, now=NOW) == 0
+    assert bot.main(environ=env, session=session, now=NOW, product_id=2) == 0
     assert session.events == ["get"]
     assert "intervalo global mínimo de quatro horas" in capsys.readouterr().out
