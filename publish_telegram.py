@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import pandas as pd
 import requests
 
-from pinterest_publisher import send_pinterest_pin
+from pinterest_publisher import PinterestPublisherError, build_pin_payload, send_pinterest_pin
 
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
@@ -389,6 +389,24 @@ def main(
         save(token, df, sha, session)
         print("Todos os canais configurados já registram envio; nenhuma republicação foi feita.")
         return 0
+
+    if "pinterest" in pending_channels:
+        try:
+            build_pin_payload(row, pinterest_board_id)
+        except PinterestPublisherError as exc:
+            df.at[index, "status_publicacao"] = "revisar"
+            df.at[index, "pinterest_status"] = "revisar"
+            try:
+                save(token, df, sha, session)
+            except Exception as save_exc:
+                raise RuntimeError(
+                    "Pin inválido antes do envio; nenhum canal foi publicado e o estado não pôde ser registrado. "
+                    + _redact(save_exc, token, telegram_token, pinterest_token)
+                ) from None
+            raise RuntimeError(
+                "Pin inválido antes do envio; nenhum canal foi publicado e o produto foi marcado para revisão. "
+                + str(exc)
+            ) from None
 
     # Reserva persistente antes de publicar: quedas ou respostas ambíguas
     # ficam bloqueadas para revisão manual, em vez de gerar duplicatas.

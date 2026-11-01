@@ -8,6 +8,7 @@ import streamlit as st
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
 from shopee_affiliate_api import ShopeeAffiliateAPIError, check_connection as test_shopee_affiliate_api_connection
 from publish_telegram import _redact as redact_secrets, ad as telegram_ad, main as publish_offer, parse_bool
+from pinterest_publisher import PinterestPublisherError, build_pin_payload
 from spreadsheet_exports import build_exports
 
 OWNER = "Lucas10-GIT"
@@ -435,12 +436,29 @@ with telegram:
             and secret("telegram_chat_id")
             and (not pinterest_enabled or (pinterest_token and pinterest_board_id))
         )
-        can_publish = product_is_approved and publisher_credentials_ready
+        pinterest_preflight_error = ""
+        if pinterest_enabled and pinterest_token and pinterest_board_id and product_is_approved:
+            try:
+                build_pin_payload(selected_row, str(pinterest_board_id))
+            except PinterestPublisherError as exc:
+                pinterest_preflight_error = str(exc)
+        can_publish = product_is_approved and publisher_credentials_ready and not pinterest_preflight_error
         if not product_is_approved:
             st.warning("Publicação bloqueada: ative e aprove este produto depois de revisar nome, preço, imagem e link.")
         elif not publisher_credentials_ready:
             st.warning("Publicação bloqueada: configure os Secrets obrigatórios indicados acima.")
-        if st.button("🚀 Publicar oferta aprovada agora", disabled=not can_publish):
+        elif pinterest_preflight_error:
+            st.warning("Pin bloqueado antes do envio: " + pinterest_preflight_error)
+        if pinterest_enabled and publisher_credentials_ready and not pinterest_preflight_error:
+            st.caption(
+                "Um clique envia primeiro ao Telegram e depois cria um Pin linkado com o link afiliado original. "
+                "Os canais são sequenciais; se o Pinterest falhar depois do Telegram, o estado exige revisão manual."
+            )
+        button_label = (
+            "🚀 Publicar no Telegram + Pinterest (Pin linkado)"
+            if pinterest_enabled else "🚀 Publicar no Telegram"
+        )
+        if st.button(button_label, disabled=not can_publish):
             github_token = secret("github_token")
             telegram_token = secret("telegram_bot_token")
             chat_id = secret("telegram_chat_id")

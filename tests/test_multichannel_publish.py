@@ -58,6 +58,7 @@ class FakeMultiChannelSession:
         self.events = []
         self.pinterest_error = pinterest_error
         self.frames = []
+        self.post_payloads = []
 
     def get(self, url, **kwargs):
         self.events.append(("get", url))
@@ -76,6 +77,7 @@ class FakeMultiChannelSession:
 
     def post(self, url, data=None, json=None, headers=None, timeout=None):
         self.events.append(("post", url))
+        self.post_payloads.append((url, data, json))
         if "api.pinterest.com/v5/pins" in url:
             return FakeResponse({"id": "pin-789"}, error=self.pinterest_error)
         return FakeResponse({"ok": True, "result": {"message_id": 42}})
@@ -105,6 +107,8 @@ def test_approved_offer_posts_to_both_channels_and_persists_each_id(capsys):
     assert len(destinations) == 2
     assert "api.telegram.org" in destinations[0]
     assert destinations[1] == "https://api.pinterest.com/v5/pins"
+    pinterest_payload = next(payload for url, _, payload in session.post_payloads if url == destinations[1])
+    assert pinterest_payload["link"] == approved_product()["link"]
     assert len(session.frames) == 3  # reserve, checkpoint after first channel, final state
     final = session.frames[-1].iloc[0]
     assert final["status_publicacao"] == "enviado"
@@ -149,6 +153,27 @@ def test_pinterest_enabled_without_secrets_fails_before_any_request():
     with pytest.raises(RuntimeError, match="PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID"):
         bot.main(environ=env, session=session, now=NOW)
     assert session.events == []
+
+
+def test_invalid_pinterest_pin_is_blocked_before_telegram_and_marked_for_review():
+    row = approved_product()
+    row["imagem_url"] = ""
+    session = FakeMultiChannelSession(pd.DataFrame([row]))
+    env = {
+        **BASE_ENV,
+        "PINTEREST_PUBLISH_ENABLED": "true",
+        "PINTEREST_ACCESS_TOKEN": "pinterest-test-token",
+        "PINTEREST_BOARD_ID": "123456789",
+    }
+
+    with pytest.raises(RuntimeError, match="nenhum canal foi publicado") as error:
+        bot.main(environ=env, session=session, now=NOW)
+
+    assert "imagem pública HTTPS" in str(error.value)
+    assert not [event for event in session.events if event[0] == "post"]
+    saved = pd.read_csv(io.StringIO(session.csv_text)).iloc[0]
+    assert saved["status_publicacao"] == "revisar"
+    assert saved["pinterest_status"] == "revisar"
 
 
 def test_pinterest_is_not_contacted_when_feature_flag_is_false():

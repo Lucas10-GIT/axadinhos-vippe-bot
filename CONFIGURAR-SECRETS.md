@@ -24,7 +24,7 @@ pinterest_board_id = "COLE_AQUI_O_ID_DO_BOARD"
 pinterest_publish_enabled = false
 ```
 
-Mantenha `false` durante a configuração. Para publicar também no Pinterest em uma ação manual, altere para `true` depois de conferir o token e o board. **Não existe modo de teste sem publicação para essa chamada:** ao clicar no botão com Pinterest habilitado, o Pin será criado de verdade. A mesma ação envia ao Telegram e ao Pinterest. Para Telegram somente, mantenha `false`.
+Mantenha `false` durante a configuração. Para publicar também no Pinterest em uma ação manual, altere para `true` depois de conferir o token e o board. **Não existe modo de teste sem publicação para essa chamada:** ao clicar no botão com Pinterest habilitado, o Pin será criado de verdade. Um clique envia primeiro ao Telegram e depois cria no Pinterest um Pin linkado pelo campo de URL ao link afiliado original. Os serviços não oferecem uma transação conjunta: se o Pinterest falhar depois do Telegram, o Telegram continua enviado e o Pinterest fica para revisão, sem repetição automática. Para Telegram somente, mantenha `false`.
 
 O token precisa estar válido e ter acesso para criar Pins no board indicado. O produto precisa ter nome, preço, link HTTPS da Shopee e imagem pública HTTPS. O texto do Pin contém aviso de link de afiliado; o endereço original de afiliado é mantido.
 
