@@ -54,6 +54,15 @@ def test_due_date_handles_naive_and_timezone_aware_values():
     assert bot.is_due(row, NOW) is False
 
 
+def test_global_publication_cooldown_uses_latest_recorded_publication():
+    df = pd.DataFrame([
+        approved_product(ultima_publicacao="2026-10-29T09:00:00Z"),
+        approved_product(id=2, ultima_publicacao="2026-10-29T08:00:00Z"),
+    ])
+    assert bot.publication_cooldown_until(df) == datetime(2026, 10, 29, 13, 0, tzinfo=timezone.utc)
+    assert bot.publication_cooldown_until(pd.DataFrame([approved_product()])) is None
+
+
 def test_unapproved_or_inactive_products_are_never_selected():
     df = pd.DataFrame([
         approved_product(nome="Desativado", ativo="False", pedidos=10, cliques=50),
@@ -239,3 +248,22 @@ def test_failed_or_ambiguous_send_is_marked_for_review_and_not_retried():
 
 def test_error_message_redacts_tokens():
     assert bot._redact("failure telegram-secret", "telegram-secret") == "failure [REDACTED]"
+
+
+def test_main_skips_all_candidates_until_global_four_hour_cooldown_expires(capsys):
+    recent = (NOW - pd.Timedelta(hours=3)).isoformat()
+    frame = pd.DataFrame([
+        approved_product(id=1, status_publicacao="enviado", ultima_publicacao=recent),
+        approved_product(id=2, nome="Próxima oferta"),
+    ])
+    session = FakeGitHubTelegramSession(frame)
+    env = {
+        "PUBLISH_CONFIRMED": "true",
+        "GITHUB_TOKEN": "github-test-token",
+        "TELEGRAM_BOT_TOKEN": "telegram-test-token",
+        "TELEGRAM_CHAT_ID": "channel-test",
+    }
+
+    assert bot.main(environ=env, session=session, now=NOW) == 0
+    assert session.events == ["get"]
+    assert "intervalo global mínimo de quatro horas" in capsys.readouterr().out
