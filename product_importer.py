@@ -22,6 +22,7 @@ REQUEST_TIMEOUT = (3, 5)
 USER_AGENT = "AxadinhosVippeProductImporter/1.0 (public metadata preview)"
 REDIRECT_CODES = {301, 302, 303, 307, 308}
 ALLOWED_HOSTS = {"shopee.com.br", "shopee.com", "shope.ee", "shp.ee"}
+METADATA_FIELDS = ("nome", "preco", "imagem_url", "categoria")
 
 
 def is_shopee_url(value: Any) -> bool:
@@ -93,43 +94,57 @@ def link_key(value: str) -> str:
 
 
 class _MetadataParser(HTMLParser):
+    """Collect standard meta tags, JSON-LD and JSON state blocks from HTML."""
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.meta: dict[str, str] = {}
         self.title_parts: list[str] = []
-        self.jsonld_parts: list[str] = []
+        self.json_parts: list[str] = []
         self._in_title = False
-        self._in_jsonld = False
-        self._current_jsonld: list[str] = []
+        self._in_json = False
+        self._current_json: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.casefold(): value or "" for key, value in attrs}
-        if tag.casefold() == "meta":
-            key = (values.get("property") or values.get("name") or values.get("itemprop") or "").casefold()
+        tag = tag.casefold()
+        if tag == "meta":
             content = values.get("content", "").strip()
-            if key and content:
-                self.meta.setdefault(key, content)
-        elif tag.casefold() == "title":
+            # Read every supported attribute instead of choosing just one; some
+            # stores combine property/name/itemprop on nonstandard meta tags.
+            for attr in ("property", "name", "itemprop"):
+                key = values.get(attr, "").casefold()
+                if key and content:
+                    self.meta.setdefault(key, content)
+        elif tag == "title":
             self._in_title = True
-        elif tag.casefold() == "script" and "ld+json" in values.get("type", "").casefold():
-            self._in_jsonld = True
-            self._current_jsonld = []
+        elif tag == "script":
+            script_type = values.get("type", "").casefold()
+            script_id = values.get("id", "").casefold()
+            self._in_json = (
+                "ld+json" in script_type
+                or script_type.split(";", 1)[0].strip() == "application/json"
+                or script_id in {"__next_data__", "__nuxt_data__", "__initial_state__"}
+            )
+            if self._in_json:
+                self._current_json = []
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.casefold() == "title":
+        tag = tag.casefold()
+        if tag == "title":
             self._in_title = False
-        elif tag.casefold() == "script" and self._in_jsonld:
-            value = "".join(self._current_jsonld).strip()
+        elif tag == "script" and self._in_json:
+            value = "".join(self._current_json).strip()
             if value:
-                self.jsonld_parts.append(value)
-            self._current_jsonld = []
-            self._in_jsonld = False
+                self.json_parts.append(value)
+            self._current_json = []
+            self._in_json = False
 
     def handle_data(self, data: str) -> None:
         if self._in_title:
             self.title_parts.append(data)
-        if self._in_jsonld:
-            self._current_jsonld.append(data)
+        if self._in_json:
+            self._current_json.append(data)
 
 
 def _walk_json(value: Any):
@@ -142,8 +157,32 @@ def _walk_json(value: Any):
             yield from _walk_json(child)
 
 
+def _first_text(value: Any) -> str:
+    """Convert common Schema.org scalar/list/object values to display text."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, list):
+        for item in value:
+            text = _first_text(item)
+            if text:
+                return text
+    if isinstance(value, dict):
+        for key in ("name", "@value", "value", "url"):
+            text = _first_text(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _is_product_type(value: Any) -> bool:
+    types = value if isinstance(value, list) else [value]
+    return any(str(item).casefold().rstrip("/").split("/")[-1] == "product" for item in types)
+
+
 def _format_price(value: Any, currency: str = "BRL") -> str:
-    text = str(value or "").strip()
+    text = _first_text(value)
     if not text:
         return ""
     if "R$" in text:
@@ -163,8 +202,18 @@ def _format_price(value: Any, currency: str = "BRL") -> str:
     return f"R$ {formatted}"
 
 
+def _empty_metadata(status: str) -> dict[str, str]:
+    return {
+        "nome": "",
+        "preco": "",
+        "imagem_url": "",
+        "categoria": "",
+        "status_metadados": status,
+    }
+
+
 def parse_product_metadata(html: str) -> dict[str, str]:
-    """Extract common Open Graph, product meta, and JSON-LD fields if present."""
+    """Extract product data from public Open Graph, itemprop and JSON metadata."""
     parser = _MetadataParser()
     try:
         parser.feed((html or "")[:MAX_HTML_BYTES])
@@ -172,25 +221,36 @@ def parse_product_metadata(html: str) -> dict[str, str]:
         pass
 
     products = []
-    for raw in parser.jsonld_parts:
+    for raw in parser.json_parts:
         try:
             payload = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             continue
         products.extend(
             item for item in _walk_json(payload)
-            if str(item.get("@type", "")).casefold() in {"product", "https://schema.org/product"}
-            or (item.get("name") and item.get("offers"))
+            if _is_product_type(item.get("@type"))
+            or (
+                item.get("name")
+                and any(key in item for key in ("offers", "price", "image", "category", "sku"))
+            )
         )
 
     name = (
         parser.meta.get("og:title")
         or parser.meta.get("twitter:title")
         or parser.meta.get("title")
+        or parser.meta.get("name")
         or (" ".join(parser.title_parts).strip())
     )
     name = re.sub(r"\s*[|–—-]\s*Shopee(?:\s+Brasil)?\s*$", "", name, flags=re.IGNORECASE).strip()
-    image = parser.meta.get("og:image") or parser.meta.get("twitter:image") or ""
+    image = parser.meta.get("og:image") or parser.meta.get("twitter:image") or parser.meta.get("image") or ""
+    category = (
+        parser.meta.get("product:category")
+        or parser.meta.get("og:category")
+        or parser.meta.get("article:section")
+        or parser.meta.get("category")
+        or ""
+    )
 
     price_value = (
         parser.meta.get("product:price:amount")
@@ -204,29 +264,34 @@ def parse_product_metadata(html: str) -> dict[str, str]:
         or "BRL"
     )
     for product in products:
-        if not name and isinstance(product.get("name"), str):
-            name = product["name"].strip()
+        if not name:
+            name = _first_text(product.get("name"))
         if not image:
-            image_value = product.get("image", "")
-            if isinstance(image_value, list):
-                image_value = image_value[0] if image_value else ""
-            if isinstance(image_value, dict):
-                image_value = image_value.get("url", "")
-            if isinstance(image_value, str):
-                image = image_value.strip()
+            image = _first_text(product.get("image"))
+        if not category:
+            category = _first_text(product.get("category") or product.get("categoryName"))
         if not price_value:
             offers = product.get("offers", {})
             if isinstance(offers, list):
                 offers = offers[0] if offers else {}
             if isinstance(offers, dict):
-                price_value = offers.get("price") or offers.get("lowPrice") or ""
-                currency = offers.get("priceCurrency") or currency
+                price_value = offers.get("price") or offers.get("lowPrice") or product.get("price") or ""
+                currency = offers.get("priceCurrency") or product.get("priceCurrency") or currency
+            elif product.get("price"):
+                price_value = product.get("price")
 
-    return {
-        "nome": name,
-        "preco": _format_price(price_value, currency),
-        "imagem_url": image,
+    metadata = {
+        "nome": _first_text(name),
+        "preco": _format_price(price_value, str(currency or "BRL")),
+        "imagem_url": _first_text(image),
+        "categoria": _first_text(category),
     }
+    metadata["status_metadados"] = (
+        "completo" if metadata["nome"] and metadata["preco"]
+        else "parcial" if any(metadata[field] for field in METADATA_FIELDS)
+        else "indisponivel"
+    )
+    return metadata
 
 
 def _read_response_text(response: Any) -> str:
@@ -251,7 +316,7 @@ def _read_response_text(response: Any) -> str:
 def fetch_product_metadata(url: str, session=requests) -> dict[str, str]:
     """Fetch metadata only through Shopee hosts, validating every redirect hop."""
     if not is_shopee_url(url):
-        return {"nome": "", "preco": "", "imagem_url": ""}
+        return _empty_metadata("link_invalido")
 
     current = url
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
@@ -265,32 +330,32 @@ def fetch_product_metadata(url: str, session=requests) -> dict[str, str]:
                 stream=True,
             )
         except requests.RequestException:
-            return {"nome": "", "preco": "", "imagem_url": ""}
+            return _empty_metadata("falha_de_conexao")
         try:
             if response.status_code in REDIRECT_CODES:
                 location = response.headers.get("Location", "")
                 if not location:
-                    return {"nome": "", "preco": "", "imagem_url": ""}
+                    return _empty_metadata("redirecionamento_incompleto")
                 current = urljoin(current, location)
                 if not is_shopee_url(current):
-                    return {"nome": "", "preco": "", "imagem_url": ""}
+                    return _empty_metadata("redirecionamento_bloqueado")
                 continue
             if response.status_code != 200:
-                return {"nome": "", "preco": "", "imagem_url": ""}
+                return _empty_metadata(f"http_{response.status_code}")
             content_type = response.headers.get("Content-Type", "").casefold()
             if content_type and "html" not in content_type and "xhtml" not in content_type:
-                return {"nome": "", "preco": "", "imagem_url": ""}
+                return _empty_metadata("resposta_nao_html")
             metadata = parse_product_metadata(_read_response_text(response))
             if metadata.get("imagem_url"):
                 metadata["imagem_url"] = urljoin(current, metadata["imagem_url"])
             return metadata
         except requests.RequestException:
-            return {"nome": "", "preco": "", "imagem_url": ""}
+            return _empty_metadata("falha_ao_ler_pagina")
         finally:
             close = getattr(response, "close", None)
             if callable(close):
                 close()
-    return {"nome": "", "preco": "", "imagem_url": ""}
+    return _empty_metadata("limite_de_redirecionamentos")
 
 
 def import_product_links(text: str, existing_links=(), session=requests) -> dict[str, Any]:
@@ -316,13 +381,13 @@ def import_product_links(text: str, existing_links=(), session=requests) -> dict
     accepted = accepted[:MAX_LINKS_PER_BATCH]
 
     # A small worker pool avoids a long serial wait for multiple links while
-    # keeping requests bounded. Any page that blocks extraction still yields a
-    # draft link; missing title/price remain blank for human review.
+    # keeping requests bounded. Pages that block extraction still yield drafts.
     with ThreadPoolExecutor(max_workers=4) as pool:
         metadata = list(pool.map(lambda link: fetch_product_metadata(link, session), accepted))
 
     products = []
     incomplete = []
+    diagnostics = []
     for link, info in zip(accepted, metadata):
         row = {
             "id": "",
@@ -332,7 +397,7 @@ def import_product_links(text: str, existing_links=(), session=requests) -> dict
             # followed for metadata and never replace the tracking link.
             "link": link,
             "imagem_url": info.get("imagem_url", ""),
-            "categoria": "",
+            "categoria": info.get("categoria", ""),
             "comissao": 0,
             "ativo": False,
             "aprovado_publicacao": False,
@@ -346,8 +411,15 @@ def import_product_links(text: str, existing_links=(), session=requests) -> dict
             "ultima_tentativa": "",
             "telegram_message_id": "",
         }
-        if not row["nome"] or not row["preco"]:
+        missing = [field for field in METADATA_FIELDS if not row[field]]
+        if "nome" in missing or "preco" in missing:
             incomplete.append(link)
+        diagnostics.append({
+            "link": link,
+            "status": info.get("status_metadados", "indisponivel"),
+            "extraidos": [field for field in METADATA_FIELDS if row[field]],
+            "faltando": missing,
+        })
         products.append(row)
 
     return {
@@ -355,6 +427,7 @@ def import_product_links(text: str, existing_links=(), session=requests) -> dict
         "invalid": invalid,
         "duplicates": duplicates,
         "incomplete": incomplete,
+        "diagnostics": diagnostics,
         "limit_reached": limit_reached,
         "ignored_over_limit": max(0, len(accepted) + (len(candidates) - len(invalid) - len(duplicates) - len(accepted)) - MAX_LINKS_PER_BATCH),
     }
