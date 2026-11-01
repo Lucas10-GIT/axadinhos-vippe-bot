@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
+from shopee_affiliate_api import ShopeeAffiliateAPIError, extract_item_id, lookup_product_by_item_id
 
 MAX_LINKS_PER_BATCH = 20
 MAX_REDIRECTS = 5
@@ -465,7 +466,11 @@ def _read_response_text(response: Any) -> str:
     return str(getattr(response, "text", ""))[:MAX_HTML_BYTES]
 
 
-def fetch_product_metadata(url: str, session=requests) -> dict[str, str]:
+def fetch_product_metadata(
+    url: str,
+    session=requests,
+    include_resolved_url: bool = False,
+) -> dict[str, str]:
     """Fetch metadata only through Shopee hosts, validating every redirect hop."""
     if not is_shopee_url(url):
         return _empty_metadata("link_invalido")
@@ -498,6 +503,8 @@ def fetch_product_metadata(url: str, session=requests) -> dict[str, str]:
             if content_type and "html" not in content_type and "xhtml" not in content_type:
                 return _empty_metadata("resposta_nao_html")
             metadata = parse_product_metadata(_read_response_text(response))
+            if include_resolved_url:
+                metadata["_resolved_url"] = current
             if metadata.get("imagem_url"):
                 metadata["imagem_url"] = urljoin(current, metadata["imagem_url"])
             return metadata
@@ -510,7 +517,12 @@ def fetch_product_metadata(url: str, session=requests) -> dict[str, str]:
     return _empty_metadata("limite_de_redirecionamentos")
 
 
-def import_product_links(text: str, existing_links=(), session=requests) -> dict[str, Any]:
+def import_product_links(
+    text: str,
+    existing_links=(),
+    session=requests,
+    affiliate_api_credentials: tuple[str, str] | None = None,
+) -> dict[str, Any]:
     """Prepare rows for review; never activates or approves imported products."""
     candidates = extract_links(text)
     invalid: list[str] = []
@@ -534,8 +546,33 @@ def import_product_links(text: str, existing_links=(), session=requests) -> dict
 
     # A small worker pool avoids a long serial wait for multiple links while
     # keeping requests bounded. Pages that block extraction still yield drafts.
+    def fetch_and_enrich(link: str) -> dict[str, str]:
+        page_info = fetch_product_metadata(link, session, include_resolved_url=True)
+        if not affiliate_api_credentials:
+            return page_info
+        app_id, app_secret = affiliate_api_credentials
+        item_id = extract_item_id(page_info.get("_resolved_url") or link)
+        if not app_id or not app_secret or item_id is None:
+            return page_info
+        try:
+            api_info = lookup_product_by_item_id(item_id, app_id, app_secret, session=session)
+        except ShopeeAffiliateAPIError:
+            return page_info
+        if not api_info:
+            return page_info
+        for field in METADATA_FIELDS:
+            if api_info.get(field):
+                page_info[field] = api_info[field]
+        page_info["api_used"] = "true"
+        page_info["status_metadados"] = (
+            "completo" if page_info.get("nome") and page_info.get("preco")
+            else "parcial" if any(page_info.get(field) for field in METADATA_FIELDS)
+            else "indisponivel"
+        )
+        return page_info
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        metadata = list(pool.map(lambda link: fetch_product_metadata(link, session), accepted))
+        metadata = list(pool.map(fetch_and_enrich, accepted))
 
     products = []
     incomplete = []
@@ -566,12 +603,15 @@ def import_product_links(text: str, existing_links=(), session=requests) -> dict
         missing = [field for field in METADATA_FIELDS if not row[field]]
         if "nome" in missing or "preco" in missing:
             incomplete.append(link)
-        diagnostics.append({
+        diagnostic = {
             "link": link,
             "status": info.get("status_metadados", "indisponivel"),
             "extraidos": [field for field in METADATA_FIELDS if row[field]],
             "faltando": missing,
-        })
+        }
+        if info.get("api_used") == "true":
+            diagnostic["api_used"] = True
+        diagnostics.append(diagnostic)
         products.append(row)
 
     return {
