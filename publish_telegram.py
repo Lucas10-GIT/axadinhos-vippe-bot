@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 import pandas as pd
 import requests
 
+from pinterest_publisher import send_pinterest_pin
+
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
 BRANCH = "main"
@@ -276,6 +278,9 @@ def main(
     token = environ.get("GH_AUTOMATION_TOKEN") or environ.get("GITHUB_TOKEN")
     telegram_token = environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = environ.get("TELEGRAM_CHAT_ID")
+    pinterest_enabled = parse_bool(environ.get("PINTEREST_PUBLISH_ENABLED", False), default=False)
+    pinterest_token = environ.get("PINTEREST_ACCESS_TOKEN")
+    pinterest_board_id = environ.get("PINTEREST_BOARD_ID")
     missing = [
         name for name, value in (
             ("GH_AUTOMATION_TOKEN ou GITHUB_TOKEN", token),
@@ -283,6 +288,13 @@ def main(
             ("TELEGRAM_CHAT_ID", chat_id),
         ) if not value
     ]
+    if pinterest_enabled:
+        missing.extend(
+            name for name, value in (
+                ("PINTEREST_ACCESS_TOKEN", pinterest_token),
+                ("PINTEREST_BOARD_ID", pinterest_board_id),
+            ) if not value
+        )
     if missing:
         raise RuntimeError("Secrets/variáveis ausentes: " + ", ".join(missing))
 
@@ -293,12 +305,22 @@ def main(
         "proxima_publicacao": "",
         "ultima_tentativa": "",
         "telegram_message_id": "",
+        "telegram_status": "pendente",
+        "pinterest_status": "pendente",
+        "pinterest_pin_id": "",
     }
     for column, default in state_defaults.items():
         if column not in df.columns:
             df[column] = default
         df[column] = df[column].astype("object")
         df[column] = df[column].where(df[column].notna(), default)
+    df["telegram_status"] = df["telegram_status"].astype(str).str.strip().str.casefold()
+    df["pinterest_status"] = df["pinterest_status"].astype(str).str.strip().str.casefold()
+    for row_index, stored_row in df.iterrows():
+        if _display(stored_row.get("telegram_message_id")):
+            df.at[row_index, "telegram_status"] = "enviado"
+        if _display(stored_row.get("pinterest_pin_id")):
+            df.at[row_index, "pinterest_status"] = "enviado"
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
@@ -336,41 +358,85 @@ def main(
         return 0
 
     index, row = candidate
-    # Reserva persistente antes de enviar: se o processo cair depois do envio,
-    # a próxima execução não republicará automaticamente o mesmo produto.
+    channels = ["telegram"] + (["pinterest"] if pinterest_enabled else [])
+    review_channels = [
+        channel for channel in channels
+        if _display(row.get(f"{channel}_status"), "pendente").casefold() == "revisar"
+    ]
+    if review_channels:
+        df.at[index, "status_publicacao"] = "revisar"
+        save(token, df, sha, session)
+        raise RuntimeError(
+            "Canal(is) aguardando revisão antes de novo envio: " + ", ".join(review_channels)
+        )
+
+    pending_channels = [
+        channel for channel in channels
+        if _display(row.get(f"{channel}_status"), "pendente").casefold() == "pendente"
+    ]
+    unknown_channels = [
+        channel for channel in channels
+        if _display(row.get(f"{channel}_status"), "pendente").casefold() not in {"pendente", "enviado"}
+    ]
+    if unknown_channels:
+        df.at[index, "status_publicacao"] = "revisar"
+        save(token, df, sha, session)
+        raise RuntimeError(
+            "Estado de canal desconhecido; revise antes de publicar: " + ", ".join(unknown_channels)
+        )
+    if not pending_channels:
+        df.at[index, "status_publicacao"] = "enviado"
+        save(token, df, sha, session)
+        print("Todos os canais configurados já registram envio; nenhuma republicação foi feita.")
+        return 0
+
+    # Reserva persistente antes de publicar: quedas ou respostas ambíguas
+    # ficam bloqueadas para revisão manual, em vez de gerar duplicatas.
     df.at[index, "status_publicacao"] = "enviando"
     df.at[index, "ultima_tentativa"] = current.isoformat()
     pending_sha = save(token, df, sha, session)
 
+    current_channel = ""
     try:
-        result = send_telegram(row, telegram_token, chat_id, session)
+        for position, channel in enumerate(pending_channels):
+            current_channel = channel
+            if channel == "telegram":
+                result = send_telegram(row, telegram_token, chat_id, session)
+                message_id = result.get("result", {}).get("message_id", "")
+                df.at[index, "telegram_message_id"] = str(message_id) if message_id != "" else ""
+            else:
+                result = send_pinterest_pin(row, pinterest_token, pinterest_board_id, session)
+                df.at[index, "pinterest_pin_id"] = str(result["id"])
+            df.at[index, f"{channel}_status"] = "enviado"
+            df.at[index, "ultima_publicacao"] = current.isoformat()
+            # Checkpoint between channels so a successful destination is not
+            # repeated if the next platform rejects or times out.
+            if position < len(pending_channels) - 1:
+                pending_sha = save(token, df, pending_sha, session)
+
+        frequency = publication_frequency(row)
+        df.at[index, "status_publicacao"] = "enviado"
+        df.at[index, "frequencia_dias"] = frequency
+        df.at[index, "proxima_publicacao"] = (current + timedelta(days=frequency)).isoformat()
+        save(token, df, pending_sha, session)
     except Exception as exc:
-        # Resultado ambíguo (por exemplo, timeout) exige revisão humana antes
-        # de qualquer nova tentativa para evitar duplicar um post já entregue.
+        if current_channel:
+            df.at[index, f"{current_channel}_status"] = "revisar"
         df.at[index, "status_publicacao"] = "revisar"
         try:
             save(token, df, pending_sha, session)
         except Exception as save_exc:
             raise RuntimeError(
-                "Falha no envio e não foi possível atualizar o estado; o produto permanece reservado para revisão. "
-                + _redact(save_exc, token, telegram_token)
+                "Falha no envio e no registro do estado; o produto permanece reservado para revisão. "
+                + _redact(save_exc, token, telegram_token, pinterest_token)
             ) from None
         raise RuntimeError(
-            "Telegram não confirmou o envio; produto marcado para revisão manual. "
-            + _redact(exc, token, telegram_token)
+            f"{current_channel.title() or 'Canal'} não confirmou o envio; produto marcado para revisão manual. "
+            + _redact(exc, token, telegram_token, pinterest_token)
         ) from None
 
-    frequency = publication_frequency(row)
-    df.at[index, "status_publicacao"] = "enviado"
-    df.at[index, "ultima_publicacao"] = current.isoformat()
-    df.at[index, "frequencia_dias"] = frequency
-    df.at[index, "proxima_publicacao"] = (current + timedelta(days=frequency)).isoformat()
-    message_id = result.get("result", {}).get("message_id", "")
-    df.at[index, "telegram_message_id"] = str(message_id) if message_id != "" else ""
-    # Se este commit falhar, o estado persistido segue como "enviando"; o
-    # próximo agendamento para e não repete automaticamente a oferta.
-    save(token, df, pending_sha, session)
-    print(f"Publicado: {_display(row.get('nome'), 'produto sem nome')} | próxima em {frequency} dias")
+    channel_names = " + ".join(channel.title() for channel in channels)
+    print(f"Publicado: {_display(row.get('nome'), 'produto sem nome')} | canais: {channel_names} | próxima em {frequency} dias")
     return 0
 
 
@@ -383,5 +449,6 @@ if __name__ == "__main__":
             os.environ.get("GH_AUTOMATION_TOKEN"),
             os.environ.get("GITHUB_TOKEN"),
             os.environ.get("TELEGRAM_BOT_TOKEN"),
+            os.environ.get("PINTEREST_ACCESS_TOKEN"),
         ))
         raise SystemExit(1) from None

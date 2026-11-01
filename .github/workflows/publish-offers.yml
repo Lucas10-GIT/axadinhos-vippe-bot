@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_publish:
-        description: "Confirme para publicar uma oferta aprovada no canal Telegram."
+        description: "Confirme para publicar uma oferta aprovada no Telegram e, se habilitado, no Pinterest."
         type: boolean
         required: true
         default: false
@@ -48,4 +48,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PINTEREST_PUBLISH_ENABLED: ${{ vars.AXADINHOS_PINTEREST_CROSSPOST_ENABLED }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
           PUBLISH_CONFIRMED: ${{ (github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true') || (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true) }}

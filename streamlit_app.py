@@ -20,6 +20,7 @@ COLS = [
     "ativo", "aprovado_publicacao", "status_publicacao", "frequencia_dias",
     "cliques", "pedidos", "comissao_estimada", "ultima_publicacao",
     "proxima_publicacao", "ultima_tentativa", "telegram_message_id",
+    "telegram_status", "pinterest_status", "pinterest_pin_id",
 ]
 
 st.set_page_config(page_title="Axadinhos Vippe", page_icon="👑", layout="wide")
@@ -41,6 +42,7 @@ def clean(df):
         "cliques": 0, "pedidos": 0, "comissao_estimada": 0,
         "ultima_publicacao": "", "proxima_publicacao": "",
         "ultima_tentativa": "", "telegram_message_id": "",
+        "telegram_status": "pendente", "pinterest_status": "pendente", "pinterest_pin_id": "",
     }
     for column, default in defaults.items():
         if column not in df.columns:
@@ -67,6 +69,10 @@ def clean(df):
         lambda value: parse_bool(value, default=False)
     )
     df["status_publicacao"] = df["status_publicacao"].fillna("pronto").astype(str).str.strip().str.casefold()
+    df["telegram_status"] = df["telegram_status"].fillna("pendente").astype(str).str.strip().str.casefold()
+    df["pinterest_status"] = df["pinterest_status"].fillna("pendente").astype(str).str.strip().str.casefold()
+    df.loc[df["telegram_message_id"].fillna("").astype(str).str.strip().ne(""), "telegram_status"] = "enviado"
+    df.loc[df["pinterest_pin_id"].fillna("").astype(str).str.strip().ne(""), "pinterest_status"] = "enviado"
     return df
 
 
@@ -191,7 +197,7 @@ with products:
     with st.expander("🔗 Conectar API de Afiliados Shopee", expanded=False):
         if not api_app_id or not api_secret or not api_admin_pin:
             st.info(
-                "Configure os dados abaixo em Manage app → Settings → Secrets no Streamlit Cloud. "
+                "Quando a Shopee liberar o acesso, configure os dados abaixo em Manage app → Settings → Secrets no Streamlit Cloud. "
                 "O PIN protege as credenciais privadas porque o painel é público. Não os insira na planilha nem no código."
             )
             st.code(
@@ -241,12 +247,22 @@ with products:
             "status_publicacao": st.column_config.SelectboxColumn(
                 "Estado da publicação", options=["pronto", "enviando", "enviado", "revisar"]
             ),
+            "telegram_status": st.column_config.SelectboxColumn(
+                "Status Telegram", options=["pendente", "enviado", "revisar"]
+            ),
+            "pinterest_status": st.column_config.SelectboxColumn(
+                "Status Pinterest", options=["pendente", "enviado", "revisar"]
+            ),
             "frequencia_dias": st.column_config.NumberColumn("Dias", min_value=1, max_value=30),
             "comissao_estimada": st.column_config.NumberColumn("Comissão", format="R$ %.2f"),
         },
-        disabled=["id", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "telegram_message_id"],
+        disabled=["id", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "telegram_message_id", "pinterest_pin_id"],
     )
     edited = clean(edited)
+    st.caption(
+        "Após uma falha ambígua, confira manualmente o canal antes de mudar o status daquele destino para pendente; "
+        "isso evita republicações duplicadas."
+    )
     st.session_state["products_working_df"] = edited
 
     with st.form("bulk_import_form", clear_on_submit=True):
@@ -380,9 +396,30 @@ with ads:
 
 with telegram:
     st.subheader("📲 Telegram")
-    st.write("O envio usa o Bot API oficial do Telegram.")
+    st.write("Telegram usa o Bot API oficial. Um Pin pode ser publicado na mesma ação quando Pinterest estiver configurado e habilitado.")
     st.write("Token:", "✅" if secret("telegram_bot_token") else "❌")
     st.write("Chat/Canal:", "✅" if secret("telegram_chat_id") else "❌")
+    pinterest_token = secret("pinterest_access_token")
+    pinterest_board_id = secret("pinterest_board_id")
+    pinterest_enabled = parse_bool(secret("pinterest_publish_enabled", False), default=False)
+    st.write("Pinterest OAuth token:", "✅" if pinterest_token else "❌")
+    st.write("Pinterest Board ID:", "✅" if pinterest_board_id else "❌")
+    st.write("Pinterest habilitado para envio manual:", "✅" if pinterest_enabled else "⏸️")
+    with st.expander("Configurar Pinterest nos Streamlit Secrets"):
+        st.caption("O token e o ID do board são obtidos na integração OAuth/API do Pinterest. Não cole os valores no chat nem na planilha.")
+        st.code(
+            'pinterest_access_token = "TOKEN_OAUTH_DO_PINTEREST"\n'
+            'pinterest_board_id = "ID_NUMERICO_DO_BOARD"\n'
+            'pinterest_publish_enabled = false',
+            language="toml",
+        )
+        st.info(
+            "A opção false mantém o Pinterest desligado. Para automação pelo GitHub Actions, configure também "
+            "PINTEREST_ACCESS_TOKEN e PINTEREST_BOARD_ID em Actions Secrets e a variável "
+            "AXADINHOS_PINTEREST_CROSSPOST_ENABLED=true. A variável AXADINHOS_AUTO_PUBLISH continua sendo uma trava separada."
+        )
+    if pinterest_enabled and (not pinterest_token or not pinterest_board_id):
+        st.warning("Pinterest está habilitado, mas faltam o token OAuth e/ou o Board ID; nenhum envio multicanal será iniciado.")
     if len(df):
         selected_name = st.selectbox("Produto para teste", df["nome"].tolist(), key="telegram_test")
         selected_row = df[df["nome"] == selected_name].iloc[0]
@@ -396,23 +433,30 @@ with telegram:
             github_token = secret("github_token")
             telegram_token = secret("telegram_bot_token")
             chat_id = secret("telegram_chat_id")
+            pinterest_token = secret("pinterest_access_token")
+            pinterest_board_id = secret("pinterest_board_id")
+            pinterest_enabled = parse_bool(secret("pinterest_publish_enabled", False), default=False)
             if not github_token or not telegram_token or not chat_id:
                 st.error("Configure github_token, telegram_bot_token e telegram_chat_id nos Secrets.")
             else:
+                publish_env = {
+                    "PUBLISH_CONFIRMED": "true",
+                    "GH_AUTOMATION_TOKEN": github_token,
+                    "TELEGRAM_BOT_TOKEN": telegram_token,
+                    "TELEGRAM_CHAT_ID": chat_id,
+                    "PINTEREST_PUBLISH_ENABLED": str(pinterest_enabled).lower(),
+                    "PINTEREST_ACCESS_TOKEN": pinterest_token,
+                    "PINTEREST_BOARD_ID": pinterest_board_id,
+                }
                 try:
                     publish_offer(
-                        environ={
-                            "PUBLISH_CONFIRMED": "true",
-                            "GH_AUTOMATION_TOKEN": github_token,
-                            "TELEGRAM_BOT_TOKEN": telegram_token,
-                            "TELEGRAM_CHAT_ID": chat_id,
-                        },
+                        environ=publish_env,
                         session=requests,
                         product_id=selected_row["id"],
                     )
-                    st.success("Oferta publicada e estado registrado na base do GitHub.")
+                    st.success("Oferta publicada nos canais habilitados e estado registrado na base do GitHub.")
                     st.rerun()
                 except Exception as exc:
                     st.error("Publicação bloqueada ou falhou: " + redact_secrets(
-                        exc, github_token, telegram_token
+                        exc, github_token, telegram_token, pinterest_token
                     ))
