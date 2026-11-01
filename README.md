@@ -28,11 +28,13 @@ A publicação recorrente fica **desativada por padrão**: o job agendado só po
 
 Antes de habilitar `AXADINHOS_AUTO_PUBLISH`, revise todos os produtos ativos e aprovados: qualquer item elegível pode ser selecionado assim que uma execução for habilitada. Configure a variável conscientemente em **Settings → Secrets and variables → Actions → Variables → New repository variable**, com nome `AXADINHOS_AUTO_PUBLISH` e valor `true`. Não coloque tokens no CSV, no código, em commits ou em logs.
 
-O workflow usa o `GITHUB_TOKEN` temporário do próprio run, com permissão de gravação apenas no job de publicação, e os secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. O código redige tokens antes de imprimir mensagens de erro.
+O workflow usa o `GITHUB_TOKEN` temporário do próprio run, com permissão de gravação apenas no job de publicação, e os secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. O cross-post agendado no Pinterest é opcional e exige também `PINTEREST_ACCESS_TOKEN`, `PINTEREST_BOARD_ID` e a variável independente `AXADINHOS_PINTEREST_CROSSPOST_ENABLED=true`. O código redige tokens antes de imprimir mensagens de erro.
 
-## Configuração do Streamlit
+## Configuração de credenciais
 
-Em **Streamlit Cloud → App settings → Secrets**, configure:
+Consulte o [guia de configuração de secrets](CONFIGURAR-SECRETS.md) para obter os nomes exatos de cada valor no Streamlit Cloud e no GitHub Actions, saber quais são opcionais e ativar os canais com segurança.
+
+Para publicar manualmente no Telegram, em **Streamlit Cloud → App settings → Secrets**, configure:
 
 ```toml
 github_token = "TOKEN_COM_ACESSO_AO_CONTEUDO_DO_REPOSITORIO"
@@ -40,7 +42,7 @@ telegram_bot_token = "TOKEN_DO_BOT"
 telegram_chat_id = "ID_DO_CHAT_OU_CANAL"
 ```
 
-O `github_token` precisa ler e gravar `data/products.csv`. O bot do Telegram precisa ter permissão para publicar no canal. Não compartilhe os valores dos secrets.
+O `github_token` precisa ler e gravar `data/products.csv`. O bot do Telegram precisa ter permissão para publicar no canal. Para publicar no Pinterest ou consultar a Shopee Affiliate Open API, consulte o guia: são credenciais opcionais, ficam em campos separados e a API da Shopee depende de acesso concedido pela própria Shopee.
 
 ## Testes
 

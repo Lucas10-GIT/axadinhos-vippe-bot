@@ -397,8 +397,9 @@ with ads:
 with telegram:
     st.subheader("📲 Telegram")
     st.write("Telegram usa o Bot API oficial. Um Pin pode ser publicado na mesma ação quando Pinterest estiver configurado e habilitado.")
-    st.write("Token:", "✅" if secret("telegram_bot_token") else "❌")
-    st.write("Chat/Canal:", "✅" if secret("telegram_chat_id") else "❌")
+    st.write("GitHub — acesso à base:", "✅" if secret("github_token") else "❌")
+    st.write("Telegram Bot token:", "✅" if secret("telegram_bot_token") else "❌")
+    st.write("Telegram Chat/Canal ID:", "✅" if secret("telegram_chat_id") else "❌")
     pinterest_token = secret("pinterest_access_token")
     pinterest_board_id = secret("pinterest_board_id")
     pinterest_enabled = parse_bool(secret("pinterest_publish_enabled", False), default=False)
@@ -407,6 +408,7 @@ with telegram:
     st.write("Pinterest habilitado para envio manual:", "✅" if pinterest_enabled else "⏸️")
     with st.expander("Configurar Pinterest nos Streamlit Secrets"):
         st.caption("O token e o ID do board são obtidos na integração OAuth/API do Pinterest. Não cole os valores no chat nem na planilha.")
+        st.caption("Não há teste sem publicação: ao clicar em publicar com Pinterest habilitado, o Pin será criado de verdade.")
         st.code(
             'pinterest_access_token = "TOKEN_OAUTH_DO_PINTEREST"\n'
             'pinterest_board_id = "ID_NUMERICO_DO_BOARD"\n'
@@ -421,15 +423,24 @@ with telegram:
     if pinterest_enabled and (not pinterest_token or not pinterest_board_id):
         st.warning("Pinterest está habilitado, mas faltam o token OAuth e/ou o Board ID; nenhum envio multicanal será iniciado.")
     if len(df):
-        selected_name = st.selectbox("Produto para teste", df["nome"].tolist(), key="telegram_test")
+        selected_name = st.selectbox("Produto para publicação", df["nome"].tolist(), key="telegram_test")
         selected_row = df[df["nome"] == selected_name].iloc[0]
-        can_send_test = (
+        product_is_approved = (
             parse_bool(selected_row.get("ativo", True), default=True)
             and parse_bool(selected_row.get("aprovado_publicacao", False), default=False)
         )
-        if not can_send_test:
-            st.warning("O teste de envio fica bloqueado: ative e aprove este produto primeiro.")
-        if st.button("🚀 Publicar oferta aprovada agora", disabled=not can_send_test):
+        publisher_credentials_ready = bool(
+            secret("github_token")
+            and secret("telegram_bot_token")
+            and secret("telegram_chat_id")
+            and (not pinterest_enabled or (pinterest_token and pinterest_board_id))
+        )
+        can_publish = product_is_approved and publisher_credentials_ready
+        if not product_is_approved:
+            st.warning("Publicação bloqueada: ative e aprove este produto depois de revisar nome, preço, imagem e link.")
+        elif not publisher_credentials_ready:
+            st.warning("Publicação bloqueada: configure os Secrets obrigatórios indicados acima.")
+        if st.button("🚀 Publicar oferta aprovada agora", disabled=not can_publish):
             github_token = secret("github_token")
             telegram_token = secret("telegram_bot_token")
             chat_id = secret("telegram_chat_id")
