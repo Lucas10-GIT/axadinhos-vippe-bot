@@ -306,10 +306,13 @@ def main(
 
     cooldown_until = publication_cooldown_until(df, hours=4)
     if cooldown_until is not None and current < cooldown_until:
-        print(
+        message = (
             "Publicação adiada pelo intervalo global mínimo de quatro horas; "
             f"próxima janela após {cooldown_until.isoformat()}."
         )
+        if product_id is not None:
+            raise RuntimeError(message)
+        print(message)
         return 0
 
     if product_id is None:
