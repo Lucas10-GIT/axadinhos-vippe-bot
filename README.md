@@ -1,28 +1,34 @@
 # Axadinhos Vippe Bot
 
-Aplicativo Streamlit para manter uma lista de produtos, gerar textos de divulgação e publicar ofertas aprovadas no Telegram. A base vive em `data/products.csv` no GitHub.
+Aplicativo Streamlit para organizar produtos Shopee, revisar ofertas e publicar no Telegram. A base oficial fica em `data/products.csv` no GitHub.
 
-## Estado da automação
+## Importar vários links Shopee
 
-- O publicador lê o CSV, valida cada produto e escolhe no máximo uma oferta elegível por execução.
-- Um produto precisa estar **Ativo** e com **Aprovado para publicação** marcado, ter nome, preço e link HTTPS da Shopee, estar vencido pela frequência e não estar em estado de revisão.
-- O produto de maior score entre os elegíveis é selecionado. O score usa pedidos, comissão estimada e conversão de cliques.
-- Frequência inicial após envio: produto com 2 ou mais pedidos, 2 dias; produto com 10 ou mais cliques, 4 dias; demais, 3 dias.
-- Cada anúncio informa que o link é de afiliado e que preço/disponibilidade podem mudar na Shopee.
-- Antes de chamar o Telegram, o publicador grava `status_publicacao=enviando` no CSV. Se o envio tiver resultado ambíguo ou a gravação final falhar, a oferta fica bloqueada para evitar repetição automática; verifique o canal antes de mudar o estado para `pronto`.
+Na aba **Produtos**, cole até 20 links HTTPS da Shopee por lote, separados por linha, espaço ou vírgula. O app tenta obter título, preço e foto dos metadados públicos da página. A Shopee pode omitir esses metadados ou bloquear a leitura; nesse caso, o link entra na tabela, mas os campos indisponíveis ficam vazios para preenchimento manual.
 
-Cliques, pedidos e comissão estimada são informados manualmente no CSV; o bot não importa métricas da Shopee. O workflow automático envia no máximo uma oferta por dia e as publicações usam as notificações normais do Telegram.
+O link original é mantido para preservar o rastreamento de afiliado. Links que não sejam HTTPS da Shopee e duplicatas são ignorados. A importação apenas adiciona rascunhos à tabela local da sessão: clique em **Salvar produtos** para persistir no GitHub. Todo produto novo começa **inativo** e **sem aprovação**. Revise nome, preço, foto e destino Shopee; só então marque **Ativo** e **Aprovado para publicação**.
 
-O CSV está inicialmente vazio (apenas o cabeçalho). Cadastre ofertas reais no aplicativo e revise nome, preço, link, imagem e métricas. A aprovação é individual; itens novos não são publicados até marcar **Aprovado para publicação**.
-Na aba **Produtos**, baixe a tabela atual como CSV, Excel (`.xlsx`), TSV ou JSON.
+## Regras de publicação
+
+- O publicador escolhe no máximo uma oferta elegível por execução.
+- Exige produto **Ativo**, **Aprovado para publicação**, com nome, preço e link HTTPS Shopee válido, vencido pela frequência individual e fora de estado de revisão.
+- Existe também um intervalo global mínimo de quatro horas entre publicações registradas, para que atrasos do agendador não aproximem os disparos.
+- O produto elegível de maior score é selecionado. O score considera pedidos, comissão estimada e conversão de cliques.
+- Frequência individual após um envio: produto com 2 ou mais pedidos, 2 dias; produto com 10 ou mais cliques, 4 dias; demais, 3 dias.
+- Cada anúncio informa que o link é de afiliado e que preço e disponibilidade podem mudar na Shopee.
+- Antes do envio, o publicador grava `status_publicacao=enviando` no CSV. Se o resultado do Telegram for ambíguo ou a gravação final falhar, o produto permanece bloqueado para revisão, evitando repetição automática.
+
+Cliques, pedidos e comissão estimada são preenchidos manualmente; o bot não importa métricas da Shopee. Na aba **Produtos**, a tabela pode ser baixada em CSV, Excel (`.xlsx`), TSV ou JSON.
 
 ## Agendamento e ativação
 
-O workflow `.github/workflows/publish-offers.yml` faz uma varredura diária às **13:00 no horário de Brasília (UTC-3)** e publica no máximo uma oferta vencida. O agendamento fica **desativado por padrão**: só publica se a Actions Variable `AXADINHOS_AUTO_PUBLISH` estiver definida como `true`. Enquanto a variável estiver ausente ou diferente de `true`, os disparos agendados não executam o job de publicação.
+O workflow `.github/workflows/publish-offers.yml` verifica ofertas a cada quatro horas (`0 */4 * * *`, UTC). O GitHub Actions pode iniciar uma execução agendada com atraso; o publicador ainda respeita o intervalo global mínimo de quatro horas e envia no máximo uma oferta por execução. Havendo produtos elegíveis em todas as janelas, isso pode resultar em até seis ofertas por dia.
 
-A execução manual também exige marcar `confirm_publish` no formulário de Actions. Não acione essa opção até haver produtos reais revisados no CSV e o destino Telegram confirmado. Para ativar a rotina recorrente, configure conscientemente a variável de repositório em **Settings → Secrets and variables → Actions → Variables → New repository variable**, com nome `AXADINHOS_AUTO_PUBLISH` e valor `true`. Não habilite a variável antes de cadastrar e revisar ao menos uma oferta aprovada.
+A publicação recorrente fica **desativada por padrão**: o job agendado só pode publicar se a Actions Variable `AXADINHOS_AUTO_PUBLISH` estiver definida como `true`. Enquanto ela estiver ausente ou diferente de `true`, os disparos agendados não publicam. O workflow manual também exige marcar `confirm_publish` no formulário de Actions.
 
-O workflow usa o `GITHUB_TOKEN` de curta duração do próprio run com permissão de gravação apenas no job de publicação e os secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. Não coloque tokens no CSV, no código, em commits ou em logs. Erros do publicador redigem os tokens antes de serem impressos.
+Antes de habilitar `AXADINHOS_AUTO_PUBLISH`, revise todos os produtos ativos e aprovados: qualquer item elegível pode ser selecionado assim que uma execução for habilitada. Configure a variável conscientemente em **Settings → Secrets and variables → Actions → Variables → New repository variable**, com nome `AXADINHOS_AUTO_PUBLISH` e valor `true`. Não coloque tokens no CSV, no código, em commits ou em logs.
+
+O workflow usa o `GITHUB_TOKEN` temporário do próprio run, com permissão de gravação apenas no job de publicação, e os secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. O código redige tokens antes de imprimir mensagens de erro.
 
 ## Configuração do Streamlit
 
@@ -45,4 +51,4 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest -q
 ```
 
-O workflow `Tests` também roda nos pushes/pull requests e não publica no Telegram. O smoke test técnico de uma única mensagem permanece separado em `.github/workflows/telegram-smoke-test.yml`.
+O workflow `Tests` roda em pushes, pull requests e manualmente; ele não publica no Telegram. O smoke test técnico de uma mensagem continua separado em `.github/workflows/telegram-smoke-test.yml`.
