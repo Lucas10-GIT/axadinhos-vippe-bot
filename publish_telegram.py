@@ -264,7 +264,12 @@ def _redact(text: Any, *secrets: str | None) -> str:
     return safe
 
 
-def main(environ=os.environ, session=requests, now: datetime | None = None) -> int:
+def main(
+    environ=os.environ,
+    session=requests,
+    now: datetime | None = None,
+    product_id: Any | None = None,
+) -> int:
     if not parse_bool(environ.get("PUBLISH_CONFIRMED", False), default=False):
         raise RuntimeError("Publicação bloqueada: o workflow não confirmou PUBLISH_CONFIRMED=true.")
 
@@ -307,7 +312,22 @@ def main(environ=os.environ, session=requests, now: datetime | None = None) -> i
         )
         return 0
 
-    candidate = select_candidate(df, current)
+    if product_id is None:
+        candidate = select_candidate(df, current)
+    else:
+        if "id" not in df.columns:
+            raise RuntimeError("Publicação bloqueada: o CSV não tem a coluna id.")
+        requested_id = str(product_id).strip()
+        matches = df.index[df["id"].map(lambda value: str(value).strip()) == requested_id]
+        if len(matches) != 1:
+            raise RuntimeError("Publicação bloqueada: produto não encontrado ou ID duplicado.")
+        selected_index = matches[0]
+        selected_row = df.loc[selected_index]
+        if not is_due(selected_row, current):
+            raise RuntimeError(
+                "Publicação bloqueada: o produto escolhido precisa estar ativo, aprovado, pronto e vencido."
+            )
+        candidate = (selected_index, selected_row)
     if candidate is None:
         print("Nenhum produto ativo, aprovado, válido e vencido para publicação.")
         return 0
