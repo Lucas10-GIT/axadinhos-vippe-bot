@@ -172,8 +172,8 @@ with products:
     st.subheader("📋 Planilha de produtos")
     st.caption(
         "Cole links HTTPS da Shopee em lote. O importador tenta preencher automaticamente nome, "
-        "preço, foto e categoria a partir dos metadados públicos da página. Links originais de "
-        "afiliado são preservados; confira os dados antes de salvar."
+        "preço, foto e categoria lendo metadados, HTML e JSON/estado embutido no código-fonte público, "
+        "sem executar JavaScript. Links originais de afiliado são preservados; confira os dados antes de salvar."
     )
     st.info(
         "Importações novas entram como inativas e sem aprovação. Confira nome, preço, imagem e destino; "
@@ -264,7 +264,7 @@ with products:
             status_labels = {
                 "completo": "Nome e preço encontrados",
                 "parcial": "Alguns metadados encontrados",
-                "indisponivel": "A página não expôs metadados no HTML inicial",
+                "indisponivel": "A página não expôs metadados legíveis no código-fonte HTML inicial",
                 "redirecionamento_bloqueado": "Redirecionamento externo bloqueado por segurança",
                 "falha_de_conexao": "Não foi possível conectar à página",
                 "falha_ao_ler_pagina": "Não foi possível ler a página",
@@ -283,9 +283,10 @@ with products:
                     if missing:
                         st.warning("Faltando na tabela: " + ", ".join(missing))
                 st.info(
-                    "Algumas páginas da Shopee montam o conteúdo somente no navegador por JavaScript. "
-                    "Nesses casos o servidor não recebe nome/preço no HTML público; use o link direto "
-                    "do produto e preencha manualmente os campos que continuarem vazios. "
+                    "A importação lê HTML e dados JSON/estado embutidos na resposta pública, mas não executa "
+                    "JavaScript nem contorna login, CAPTCHA ou bloqueios. Se a Shopee montar os dados apenas "
+                    "após chamadas do navegador, nome/preço podem não estar no código-fonte recebido; use o "
+                    "link direto do produto e preencha manualmente os campos que continuarem vazios. "
                     "Os links importados permanecem inativos e sem aprovação."
                 )
         if report["duplicates"]:
