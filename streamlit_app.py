@@ -171,9 +171,9 @@ with panel:
 with products:
     st.subheader("📋 Planilha de produtos")
     st.caption(
-        "Cole links HTTPS da Shopee em lote. O importador tenta ler título, preço e foto "
-        "dos metadados públicos; se a Shopee bloquear ou omitir dados, revise e preencha a tabela. "
-        "Links originais de afiliado são preservados."
+        "Cole links HTTPS da Shopee em lote. O importador tenta preencher automaticamente nome, "
+        "preço, foto e categoria a partir dos metadados públicos da página. Links originais de "
+        "afiliado são preservados; confira os dados antes de salvar."
     )
     st.info(
         "Importações novas entram como inativas e sem aprovação. Confira nome, preço, imagem e destino; "
@@ -225,6 +225,7 @@ with products:
                 "duplicates": result["duplicates"],
                 "invalid": result["invalid"],
                 "incomplete": result["incomplete"],
+                "diagnostics": result["diagnostics"],
                 "limit_reached": result["limit_reached"],
             }
             st.rerun()
@@ -250,8 +251,43 @@ with products:
         )
         if report["incomplete"]:
             st.warning(
-                f"Metadados incompletos em {len(report['incomplete'])} link(s); preencha nome e preço manualmente antes de aprovar."
+                f"A Shopee não forneceu nome e/ou preço em {len(report['incomplete'])} link(s). "
+                "Esses campos ficaram em branco na tabela e precisam ser revisados antes da aprovação."
             )
+        if report.get("diagnostics"):
+            labels = {
+                "nome": "nome",
+                "preco": "preço",
+                "imagem_url": "foto",
+                "categoria": "categoria",
+            }
+            status_labels = {
+                "completo": "Nome e preço encontrados",
+                "parcial": "Alguns metadados encontrados",
+                "indisponivel": "A página não expôs metadados no HTML inicial",
+                "redirecionamento_bloqueado": "Redirecionamento externo bloqueado por segurança",
+                "falha_de_conexao": "Não foi possível conectar à página",
+                "falha_ao_ler_pagina": "Não foi possível ler a página",
+                "resposta_nao_html": "A resposta não era uma página HTML",
+            }
+            with st.expander("🔍 Resultado da leitura automática por link", expanded=bool(report["incomplete"])):
+                for item in report["diagnostics"]:
+                    status = item.get("status", "indisponivel")
+                    status_text = status_labels.get(status, f"Resposta da página: {status}")
+                    st.markdown(f"**{item['link']}**")
+                    st.caption(status_text)
+                    found = [labels[field] for field in item.get("extraidos", [])]
+                    missing = [labels[field] for field in item.get("faltando", [])]
+                    if found:
+                        st.write("Encontrados: " + ", ".join(found))
+                    if missing:
+                        st.warning("Faltando na tabela: " + ", ".join(missing))
+                st.info(
+                    "Algumas páginas da Shopee montam o conteúdo somente no navegador por JavaScript. "
+                    "Nesses casos o servidor não recebe nome/preço no HTML público; use o link direto "
+                    "do produto e preencha manualmente os campos que continuarem vazios. "
+                    "Os links importados permanecem inativos e sem aprovação."
+                )
         if report["duplicates"]:
             st.info(f"{len(report['duplicates'])} link(s) duplicado(s) foram ignorados.")
         if report["invalid"]:
