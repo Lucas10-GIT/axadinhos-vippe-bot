@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
-from publish_telegram import ad as telegram_ad, parse_bool
+from publish_telegram import _redact as redact_secrets, ad as telegram_ad, main as publish_offer, parse_bool
 from spreadsheet_exports import build_exports
 
 OWNER = "Lucas10-GIT"
@@ -301,42 +301,27 @@ with telegram:
         )
         if not can_send_test:
             st.warning("O teste de envio fica bloqueado: ative e aprove este produto primeiro.")
-        if st.button("🚀 Enviar teste agora", disabled=not can_send_test):
-            token = secret("telegram_bot_token")
+        if st.button("🚀 Publicar oferta aprovada agora", disabled=not can_send_test):
+            github_token = secret("github_token")
+            telegram_token = secret("telegram_bot_token")
             chat_id = secret("telegram_chat_id")
-            if not token or not chat_id:
-                st.error("Configure telegram_bot_token e telegram_chat_id.")
+            if not github_token or not telegram_token or not chat_id:
+                st.error("Configure github_token, telegram_bot_token e telegram_chat_id nos Secrets.")
             else:
-                base_url = f"https://api.telegram.org/bot{token}"
                 try:
-                    image_url = str(selected_row["imagem_url"]).strip()
-                    if image_url:
-                        response = requests.post(
-                            f"{base_url}/sendPhoto",
-                            data={
-                                "chat_id": chat_id,
-                                "photo": image_url,
-                                "caption": telegram_ad(selected_row),
-                                "parse_mode": "HTML",
-                            },
-                            timeout=30,
-                        )
-                    else:
-                        response = requests.post(
-                            f"{base_url}/sendMessage",
-                            data={
-                                "chat_id": chat_id,
-                                "text": telegram_ad(selected_row),
-                                "parse_mode": "HTML",
-                            },
-                            timeout=30,
-                        )
-                    payload = response.json()
-                    if response.ok and payload.get("ok"):
-                        st.success("Enviado!")
-                    else:
-                        st.error(payload.get("description", "Telegram recusou a mensagem."))
-                except requests.RequestException:
-                    st.error("Falha de conexão com Telegram. Confira o status do serviço e tente novamente.")
-                except ValueError:
-                    st.error("Telegram retornou uma resposta inválida.")
+                    publish_offer(
+                        environ={
+                            "PUBLISH_CONFIRMED": "true",
+                            "GH_AUTOMATION_TOKEN": github_token,
+                            "TELEGRAM_BOT_TOKEN": telegram_token,
+                            "TELEGRAM_CHAT_ID": chat_id,
+                        },
+                        session=requests,
+                        product_id=selected_row["id"],
+                    )
+                    st.success("Oferta publicada e estado registrado na base do GitHub.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error("Publicação bloqueada ou falhou: " + redact_secrets(
+                        exc, github_token, telegram_token
+                    ))
