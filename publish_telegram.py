@@ -73,6 +73,19 @@ def parse_utc(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def publication_cooldown_until(df: pd.DataFrame, hours: int = 4) -> datetime | None:
+    """Return the earliest next global publication time, if one is recorded."""
+    if "ultima_publicacao" not in df.columns:
+        return None
+    published = [
+        parsed for value in df["ultima_publicacao"]
+        if (parsed := parse_utc(value)) is not None
+    ]
+    if not published:
+        return None
+    return max(published) + timedelta(hours=max(0, int(hours)))
+
+
 def _display(value: Any, fallback: str = "") -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return fallback
@@ -285,6 +298,14 @@ def main(environ=os.environ, session=requests, now: datetime | None = None) -> i
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
+
+    cooldown_until = publication_cooldown_until(df, hours=4)
+    if cooldown_until is not None and current < cooldown_until:
+        print(
+            "Publicação adiada pelo intervalo global mínimo de quatro horas; "
+            f"próxima janela após {cooldown_until.isoformat()}."
+        )
+        return 0
 
     candidate = select_candidate(df, current)
     if candidate is None:
