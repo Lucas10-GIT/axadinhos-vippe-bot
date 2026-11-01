@@ -1,10 +1,10 @@
 name: Publicar ofertas aprovadas
 
 on:
-  # Varredura diária às 13:00 no horário de Brasília (UTC-3).
+  # Varredura a cada 4 horas em UTC; o GitHub Actions pode atrasar execuções agendadas.
   # Permanece inativa até AXADINHOS_AUTO_PUBLISH=true nas Actions Variables.
   schedule:
-    - cron: "0 16 * * *"
+    - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
       confirm_publish:
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Processar CSV e publicar no máximo uma oferta
+    name: Processar CSV e publicar no máximo uma oferta por execução
     if: >-
       ${{
         github.ref == 'refs/heads/main' &&
