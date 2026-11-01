@@ -7,6 +7,7 @@ preservado; qualquer metadado extraído deve ser revisado antes da aprovação.
 from __future__ import annotations
 
 import json
+import html as html_lib
 import re
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
@@ -18,6 +19,8 @@ import requests
 MAX_LINKS_PER_BATCH = 20
 MAX_REDIRECTS = 5
 MAX_HTML_BYTES = 1_000_000
+MAX_SCRIPT_BYTES = 750_000
+MAX_JSON_CANDIDATES = 32
 REQUEST_TIMEOUT = (3, 5)
 USER_AGENT = "AxadinhosVippeProductImporter/1.0 (public metadata preview)"
 REDIRECT_CODES = {301, 302, 303, 307, 308}
@@ -94,57 +97,170 @@ def link_key(value: str) -> str:
 
 
 class _MetadataParser(HTMLParser):
-    """Collect standard meta tags, JSON-LD and JSON state blocks from HTML."""
+    """Collect page-source metadata and inline scripts without executing JS."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.meta: dict[str, str] = {}
+        self.itemprops: dict[str, str] = {}
         self.title_parts: list[str] = []
         self.json_parts: list[str] = []
+        self.script_parts: list[str] = []
         self._in_title = False
-        self._in_json = False
-        self._current_json: list[str] = []
+        self._in_script = False
+        self._script_is_json = False
+        self._current_script: list[str] = []
+        self._script_size = 0
+        self._itemprop_stack: list[dict[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.casefold(): value or "" for key, value in attrs}
         tag = tag.casefold()
+        content = values.get("content", "").strip()
+        itemprop = values.get("itemprop", "").casefold()
+
         if tag == "meta":
-            content = values.get("content", "").strip()
-            # Read every supported attribute instead of choosing just one; some
-            # stores combine property/name/itemprop on nonstandard meta tags.
+            # Read every supported attribute; some stores combine property,
+            # name and itemprop on nonstandard meta tags.
             for attr in ("property", "name", "itemprop"):
                 key = values.get(attr, "").casefold()
                 if key and content:
                     self.meta.setdefault(key, content)
-        elif tag == "title":
+        if itemprop:
+            value = next((values.get(k, "").strip() for k in
+                          ("content", "href", "src", "data-src", "value")
+                          if values.get(k, "").strip()), "")
+            if value:
+                self.itemprops.setdefault(itemprop, value)
+            else:
+                self._itemprop_stack.append({"tag": tag, "name": itemprop, "text": ""})
+
+        data_fields = {
+            "data-name": "name", "data-product-name": "name",
+            "data-price": "price", "data-product-price": "price",
+            "data-image": "image", "data-image-url": "image",
+            "data-category": "category",
+        }
+        for attr, field in data_fields.items():
+            value = values.get(attr, "").strip()
+            if value:
+                self.itemprops.setdefault(field, value)
+        for attr, value in values.items():
+            if attr.startswith("data-") and value.strip().startswith(("{", "[")):
+                if len(value) <= MAX_SCRIPT_BYTES and len(self.json_parts) < MAX_JSON_CANDIDATES:
+                    self.json_parts.append(value.strip())
+
+        if tag == "title":
             self._in_title = True
         elif tag == "script":
             script_type = values.get("type", "").casefold()
             script_id = values.get("id", "").casefold()
-            self._in_json = (
+            self._in_script = True
+            self._script_is_json = (
                 "ld+json" in script_type
                 or script_type.split(";", 1)[0].strip() == "application/json"
-                or script_id in {"__next_data__", "__nuxt_data__", "__initial_state__"}
+                or script_type.split(";", 1)[0].strip() == "text/shopee-page-manifest"
+                or script_id in {
+                    "__next_data__", "__nuxt_data__", "__initial_state__",
+                    "__apollo_state__", "__preloaded_state__", "__initial_data__",
+                    "__ssr_data__", "__page_data__",
+                }
             )
-            if self._in_json:
-                self._current_json = []
+            self._current_script = []
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.casefold()
         if tag == "title":
             self._in_title = False
-        elif tag == "script" and self._in_json:
-            value = "".join(self._current_json).strip()
-            if value:
+        elif tag == "script" and self._in_script:
+            value = "".join(self._current_script).strip()
+            if value and len(self.script_parts) < MAX_JSON_CANDIDATES:
+                self.script_parts.append(value)
+            if value and self._script_is_json and len(self.json_parts) < MAX_JSON_CANDIDATES:
                 self.json_parts.append(value)
-            self._current_json = []
-            self._in_json = False
+            self._current_script = []
+            self._in_script = False
+            self._script_is_json = False
+        if self._itemprop_stack:
+            for index in range(len(self._itemprop_stack) - 1, -1, -1):
+                if self._itemprop_stack[index]["tag"] == tag:
+                    item = self._itemprop_stack.pop(index)
+                    text = " ".join(item["text"].split())
+                    if text:
+                        self.itemprops.setdefault(item["name"], text)
+                    break
 
     def handle_data(self, data: str) -> None:
         if self._in_title:
             self.title_parts.append(data)
-        if self._in_json:
-            self._current_json.append(data)
+        for item in self._itemprop_stack:
+            item["text"] += data
+        if self._in_script and self._script_size < MAX_SCRIPT_BYTES:
+            remaining = MAX_SCRIPT_BYTES - self._script_size
+            piece = data[:remaining]
+            self._current_script.append(piece)
+            self._script_size += len(piece)
+
+
+def _balanced_json_value(source: str, start: int) -> str:
+    """Return one balanced JSON object/array from source without evaluating it."""
+    if start >= len(source) or source[start] not in "{[":
+        return ""
+    opening = source[start]
+    closing = "}" if opening == "{" else "]"
+    stack = [closing]
+    in_string = False
+    escaped = False
+    for index in range(start + 1, min(len(source), start + MAX_SCRIPT_BYTES)):
+        char = source[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append("}")
+        elif char == "[":
+            stack.append("]")
+        elif char in "}]":
+            if not stack or char != stack[-1]:
+                return ""
+            stack.pop()
+            if not stack:
+                return source[start:index + 1]
+    return ""
+
+
+def _script_json_candidates(source: str):
+    """Find JSON state assigned in inline JS; never run page code or expressions."""
+    yielded: set[str] = set()
+    for match in re.finditer(
+        r"(?:window\s*\.\s*)?([\w$.]*(?:product|item|state|data)[\w$.]*)\s*=\s*",
+        source,
+        flags=re.IGNORECASE,
+    ):
+        start = match.end()
+        while start < len(source) and source[start].isspace():
+            start += 1
+        candidate = _balanced_json_value(source, start)
+        if candidate and candidate not in yielded:
+            yielded.add(candidate)
+            yield candidate
+
+    # Some apps place serialized state in JSON.parse("...") calls.
+    for match in re.finditer(r"JSON\s*\.\s*parse\s*\(\s*(\"(?:\\.|[^\"\\])*\")\s*\)", source):
+        try:
+            decoded = json.loads(match.group(1))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(decoded, str) and decoded[:1] in "{[" and decoded not in yielded:
+            yielded.add(decoded)
+            yield decoded
 
 
 def _walk_json(value: Any):
@@ -169,7 +285,7 @@ def _first_text(value: Any) -> str:
             if text:
                 return text
     if isinstance(value, dict):
-        for key in ("name", "@value", "value", "url"):
+        for key in ("name", "@value", "value", "amount", "price", "url"):
             text = _first_text(value.get(key))
             if text:
                 return text
@@ -179,6 +295,25 @@ def _first_text(value: Any) -> str:
 def _is_product_type(value: Any) -> bool:
     types = value if isinstance(value, list) else [value]
     return any(str(item).casefold().rstrip("/").split("/")[-1] == "product" for item in types)
+
+
+def _lookup(value: Any, *keys: str) -> Any:
+    if not isinstance(value, dict):
+        return None
+    by_casefold = {str(key).casefold(): item for key, item in value.items()}
+    for key in keys:
+        if key.casefold() in by_casefold:
+            return by_casefold[key.casefold()]
+    return None
+
+
+def _looks_like_product(value: dict[str, Any]) -> bool:
+    has_name = _lookup(value, "name", "productName", "product_name", "itemName", "item_name", "title")
+    has_product_data = any(
+        _lookup(value, key) is not None
+        for key in ("offers", "price", "currentPrice", "priceInfo", "image", "images", "category", "itemId", "productId", "sku")
+    )
+    return _is_product_type(value.get("@type")) or bool(has_name and has_product_data)
 
 
 def _format_price(value: Any, currency: str = "BRL") -> str:
@@ -213,42 +348,54 @@ def _empty_metadata(status: str) -> dict[str, str]:
 
 
 def parse_product_metadata(html: str) -> dict[str, str]:
-    """Extract product data from public Open Graph, itemprop and JSON metadata."""
+    """Extract metadata from page source without executing scripts or bypassing access controls."""
     parser = _MetadataParser()
     try:
         parser.feed((html or "")[:MAX_HTML_BYTES])
     except Exception:
         pass
 
-    products = []
-    for raw in parser.json_parts:
+    raw_candidates: list[str] = []
+    raw_seen: set[str] = set()
+    for raw in [*parser.json_parts, *parser.script_parts]:
+        for candidate in (raw, *_script_json_candidates(raw)):
+            if candidate and candidate not in raw_seen and len(raw_candidates) < MAX_JSON_CANDIDATES:
+                raw_seen.add(candidate)
+                raw_candidates.append(candidate)
+
+    products: list[dict[str, Any]] = []
+    product_seen: set[int] = set()
+    for raw in raw_candidates:
         try:
-            payload = json.loads(raw)
+            payload = json.loads(html_lib.unescape(raw))
         except (json.JSONDecodeError, TypeError):
             continue
-        products.extend(
-            item for item in _walk_json(payload)
-            if _is_product_type(item.get("@type"))
-            or (
-                item.get("name")
-                and any(key in item for key in ("offers", "price", "image", "category", "sku"))
-            )
-        )
+        for item in _walk_json(payload):
+            if _looks_like_product(item) and id(item) not in product_seen:
+                product_seen.add(id(item))
+                products.append(item)
 
     name = (
         parser.meta.get("og:title")
         or parser.meta.get("twitter:title")
         or parser.meta.get("title")
         or parser.meta.get("name")
+        or parser.itemprops.get("name")
+        or parser.itemprops.get("headline")
         or (" ".join(parser.title_parts).strip())
     )
     name = re.sub(r"\s*[|–—-]\s*Shopee(?:\s+Brasil)?\s*$", "", name, flags=re.IGNORECASE).strip()
-    image = parser.meta.get("og:image") or parser.meta.get("twitter:image") or parser.meta.get("image") or ""
+    image = (
+        parser.meta.get("og:image") or parser.meta.get("twitter:image")
+        or parser.meta.get("image") or parser.itemprops.get("image")
+        or parser.itemprops.get("thumbnailurl") or ""
+    )
     category = (
         parser.meta.get("product:category")
         or parser.meta.get("og:category")
         or parser.meta.get("article:section")
         or parser.meta.get("category")
+        or parser.itemprops.get("category")
         or ""
     )
 
@@ -256,29 +403,34 @@ def parse_product_metadata(html: str) -> dict[str, str]:
         parser.meta.get("product:price:amount")
         or parser.meta.get("og:price:amount")
         or parser.meta.get("price")
+        or parser.itemprops.get("price")
         or ""
     )
     currency = (
         parser.meta.get("product:price:currency")
         or parser.meta.get("og:price:currency")
+        or parser.itemprops.get("pricecurrency")
         or "BRL"
     )
     for product in products:
         if not name:
-            name = _first_text(product.get("name"))
+            name = _first_text(_lookup(product, "name", "productName", "product_name", "itemName", "item_name", "title"))
         if not image:
-            image = _first_text(product.get("image"))
+            image = _first_text(_lookup(product, "image", "imageUrl", "image_url", "images", "mainImage", "thumbnail", "cover"))
         if not category:
-            category = _first_text(product.get("category") or product.get("categoryName"))
+            category = _first_text(_lookup(product, "category", "categoryName", "category_name", "categoryPath"))
         if not price_value:
-            offers = product.get("offers", {})
+            offers = _lookup(product, "offers", "priceInfo", "price_info") or {}
             if isinstance(offers, list):
                 offers = offers[0] if offers else {}
             if isinstance(offers, dict):
-                price_value = offers.get("price") or offers.get("lowPrice") or product.get("price") or ""
-                currency = offers.get("priceCurrency") or product.get("priceCurrency") or currency
-            elif product.get("price"):
-                price_value = product.get("price")
+                price_value = (
+                    _lookup(offers, "price", "lowPrice", "currentPrice", "salePrice", "value")
+                    or _lookup(product, "price", "currentPrice", "salePrice", "priceValue") or ""
+                )
+                currency = _lookup(offers, "priceCurrency", "currency") or _lookup(product, "priceCurrency", "currency") or currency
+            else:
+                price_value = _lookup(product, "price", "currentPrice", "salePrice", "priceValue") or ""
 
     metadata = {
         "nome": _first_text(name),
