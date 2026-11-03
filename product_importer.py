@@ -598,7 +598,8 @@ def import_product_links(
             "ultima_publicacao": "",
             "proxima_publicacao": "",
             "ultima_tentativa": "",
-            "telegram_message_id": "",
+            "pinterest_status": "pendente",
+            "pinterest_pin_id": "",
         }
         missing = [field for field in METADATA_FIELDS if not row[field]]
         if "nome" in missing or "preco" in missing:

@@ -25,4 +25,4 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -q
       - name: Check Python syntax
-        run: python -m compileall -q product_importer.py publish_telegram.py spreadsheet_exports.py streamlit_app.py tests
+        run: python -m compileall -q product_importer.py publish_pinterest.py spreadsheet_exports.py streamlit_app.py tests
