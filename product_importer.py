@@ -598,6 +598,8 @@ def import_product_links(
             "ultima_publicacao": "",
             "proxima_publicacao": "",
             "ultima_tentativa": "",
+            "telegram_message_id": "",
+            "telegram_status": "pendente",
             "pinterest_status": "pendente",
             "pinterest_pin_id": "",
         }
