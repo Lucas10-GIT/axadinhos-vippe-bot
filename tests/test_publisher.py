@@ -171,6 +171,11 @@ def test_candidate_selection_returns_highest_scored_due_product():
     index, selected = publisher.select_candidate(pd.DataFrame([low, high]), NOW, ["pinterest"])
     assert index == 1
     assert selected["id"] == 2
+    ranked = publisher.rank_candidates(pd.DataFrame([low, high]), NOW, ["pinterest"])
+    assert [row["id"] for _, row in ranked] == [2, 1]
+    selected_again = publisher.select_candidate(pd.DataFrame([low, high]), NOW, ["pinterest"])
+    assert selected_again[0] == ranked[0][0]
+    assert selected_again[1]["id"] == ranked[0][1]["id"]
 
 
 def test_publication_frequency_uses_performance_thresholds():

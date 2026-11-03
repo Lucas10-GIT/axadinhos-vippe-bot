@@ -15,6 +15,8 @@ from publisher import (
     main as publish_offer,
     parse_bool,
     publication_cooldown_until,
+    rank_candidates,
+    score,
 )
 from pinterest_publisher import PinterestPublisherError, build_pin_payload
 from telegram_publisher import TelegramPublisherError, build_telegram_payload
@@ -181,6 +183,19 @@ with panel:
     commission_col.metric(
         "Comissão", f"R$ {df['comissao_estimada'].sum():.2f}" if len(df) else "R$ 0,00"
     )
+    telegram_col, pinterest_col, unapproved_col = st.columns(3)
+    telegram_col.metric(
+        "Posts Telegram registrados",
+        int(df["telegram_status"].eq("enviado").sum()) if len(df) else 0,
+    )
+    pinterest_col.metric(
+        "Pins registrados",
+        int(df["pinterest_status"].eq("enviado").sum()) if len(df) else 0,
+    )
+    unapproved_col.metric(
+        "Produtos sem aprovação",
+        int((~df["aprovado_publicacao"]).sum()) if len(df) else 0,
+    )
     if len(df):
         summary = df.copy()
         summary["status"] = summary.apply(classify, axis=1)
@@ -197,6 +212,62 @@ with panel:
         )
     else:
         st.info("Adicione seu primeiro produto na aba Produtos.")
+
+    st.subheader("Fila manual estimada")
+    st.caption(
+        "Prévia dos produtos que o publicador escolheria para os canais manuais habilitados. "
+        "A fila não publica nada e pode mudar após uma edição ou execução do workflow agendado."
+    )
+    manual_channels = enabled_channels({
+        "TELEGRAM_PUBLISH_ENABLED": parse_bool(
+            secret("telegram_publish_enabled", False), default=False
+        ),
+        "PINTEREST_PUBLISH_ENABLED": parse_bool(
+            secret("pinterest_publish_enabled", False), default=False
+        ),
+    })
+    manual_credentials_ready = bool(secret("github_token")) and bool(manual_channels) and all(
+        (secret("telegram_publisher_bot_token") and secret("telegram_publisher_chat_id"))
+        if channel == "telegram"
+        else (secret("pinterest_access_token") and secret("pinterest_board_id"))
+        for channel in manual_channels
+    )
+    if not manual_channels:
+        st.info("Habilite pelo menos um canal manual na aba Canais para visualizar a fila manual.")
+    elif not manual_credentials_ready:
+        st.warning("A fila manual ficará disponível quando o acesso ao GitHub e os Secrets dos canais habilitados estiverem configurados.")
+    else:
+        queue_now = datetime.now(timezone.utc)
+        due_items = rank_candidates(df, queue_now, manual_channels)
+        cooldown_until = publication_cooldown_until(df, hours=4)
+        if cooldown_until is not None and queue_now < cooldown_until:
+            st.info(
+                "Intervalo global ativo; a fila não poderá publicar antes de "
+                f"{cooldown_until.isoformat()}."
+            )
+        if due_items:
+            queue_rows = []
+            for position, (_, row) in enumerate(due_items, start=1):
+                queue_rows.append({
+                    "Ordem": position,
+                    "ID": int(row["id"]),
+                    "Produto": row["nome"],
+                    "Preço": row["preco"],
+                    "Telegram": row["telegram_status"] if "telegram" in manual_channels else "—",
+                    "Pinterest": row["pinterest_status"] if "pinterest" in manual_channels else "—",
+                    "Score": round(score(row), 2),
+                })
+            st.dataframe(
+                pd.DataFrame(queue_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                "O publicador envia no máximo uma oferta por execução. O workflow do GitHub tem opt-ins "
+                "separados e não aparece nesta fila manual."
+            )
+        else:
+            st.info("Nenhuma oferta está ativa, aprovada e elegível para os canais manuais selecionados.")
 
 with products:
     st.subheader("📋 Planilha de produtos")

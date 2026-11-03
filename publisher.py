@@ -228,12 +228,22 @@ def select_candidate(
     channels: Iterable[str] | None = None,
 ):
     """Return the due (index, row) with the highest score, or None."""
+    candidates = rank_candidates(df, now, channels)
+    return candidates[0] if candidates else None
+
+
+def rank_candidates(
+    df: pd.DataFrame,
+    now: datetime | None = None,
+    channels: Iterable[str] | None = None,
+) -> list[tuple[Any, Any]]:
+    """Return all due products in the exact priority order used for publication."""
     candidates = [
         (index, row)
         for index, row in df.iterrows()
         if is_due(row, now, channels)
     ]
-    return max(candidates, key=lambda item: score(item[1])) if candidates else None
+    return sorted(candidates, key=lambda item: score(item[1]), reverse=True)
 
 
 def publication_frequency(row: Any) -> int:

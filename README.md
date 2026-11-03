@@ -23,6 +23,8 @@ O botão do Streamlit publica apenas nos canais com opt-in manual habilitado. Se
 
 Todo produto precisa estar ativo e aprovado manualmente. O publicador processa no máximo uma oferta elegível por execução, aplica cooldown global mínimo de quatro horas e respeita a frequência por produto: 2 dias para produtos com pelo menos 2 pedidos, 4 dias para produtos com 10 ou mais cliques e 3 dias nos demais casos. Quando mais de um item estiver elegível, o maior score, baseado em pedidos, comissão estimada e conversão de cliques, tem prioridade.
 
+O **Painel** mostra contagens de posts Telegram e Pins registrados, além de uma prévia estimada da fila manual, ordenada pelo mesmo score e com o estado de cada canal selecionado. Ela é somente leitura; o envio ainda exige aprovação, opt-in, credenciais válidas e cooldown liberado. O cron do GitHub usa variáveis separadas e não é representado por essa prévia.
+
 ## Agendamento no GitHub Actions
 
 O workflow `.github/workflows/publish-offers.yml` verifica ofertas a cada quatro horas (`0 */4 * * *`, UTC), mas fica bloqueado até que haja opt-in explícito. São necessárias:
