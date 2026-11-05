@@ -10,6 +10,10 @@ O link original é preservado para manter o rastreamento de afiliado. Links fora
 
 O acesso à Shopee Affiliate Open API depende de concessão da própria Shopee. Sem acesso, a importação tradicional continua disponível e não tenta contornar a autorização.
 
+## Texto de oferta personalizável
+
+Na aba **Produtos**, o campo opcional **Chamada personalizada** aceita uma frase curta de até 180 caracteres por produto. A aba **Anúncios** mostra o texto pronto para copiar, incluindo essa chamada, nome, preço, URL de afiliado original e aviso sobre comissão e variação de preço/disponibilidade. Telegram e Pinterest acrescentam o aviso automaticamente; o Pin continua apontando para o link original. Uma chamada acima do limite ou uma descrição Pinterest longa demais bloqueia o envio, em vez de truncar o texto obrigatório. O campo não usa IA nem exige nova chave.
+
 ## Publicação Telegram e Pinterest
 
 A aba **Canais** informa se os Secrets estão presentes e se a publicação manual foi habilitada. Cada canal é independente:
@@ -22,6 +26,8 @@ Crie um bot novo pelo @BotFather se desejar usar Telegram; mantenha o token priv
 O botão do Streamlit publica apenas nos canais com opt-in manual habilitado. Se os dois estiverem ativos, o envio é **sequencial**, não simultâneo nem atômico. Antes do primeiro post, os destinos selecionados passam por pré-validação. A reserva do produto e o recibo de cada canal são gravados no CSV. Se um canal publicar e o outro falhar, o sucesso é preservado e a falha fica para revisão; não há retry automático de resultado ambíguo.
 
 Todo produto precisa estar ativo e aprovado manualmente. O publicador processa no máximo uma oferta elegível por execução, aplica cooldown global mínimo de quatro horas e respeita a frequência por produto: 2 dias para produtos com pelo menos 2 pedidos, 4 dias para produtos com 10 ou mais cliques e 3 dias nos demais casos. Quando mais de um item estiver elegível, o maior score, baseado em pedidos, comissão estimada e conversão de cliques, tem prioridade.
+
+Não foi adicionada conexão nem espelhamento de WhatsApp. Os termos da Ofertiva avisam que a existência de integração não comprova que ela seja oficial; a política da Meta exige consentimento antes de mensagens comerciais e respeito a opt-outs. Uma integração futura precisa de runtime oficial, opt-in verificável e fluxo de cancelamento, não de automação por sessão/dispositivo. Consulte a [Política de Mensagens Comerciais do WhatsApp](https://business.whatsapp.com/policy) e a documentação oficial de [opt-in](https://developers.facebook.com/documentation/business-messaging/whatsapp/getting-opt-in).
 
 O **Painel** mostra contagens de posts Telegram e Pins registrados, além de uma prévia estimada da fila manual, ordenada pelo mesmo score e com o estado de cada canal selecionado. Ela é somente leitura; o envio ainda exige aprovação, opt-in, credenciais válidas e cooldown liberado. O cron do GitHub usa variáveis separadas e não é representado por essa prévia.
 

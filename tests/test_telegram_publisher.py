@@ -48,6 +48,21 @@ def test_build_payload_preserves_affiliate_link_and_includes_disclosure():
     assert "parse_mode" not in payload
 
 
+def test_build_payload_includes_custom_callout_without_replacing_link_or_disclosure():
+    callout = "Uma opção prática para organizar a casa"
+    payload = telegram.build_telegram_payload({**ROW, "chamada": callout}, "@AchadinhosPublicos")
+
+    assert payload["caption"].startswith(callout + "\n\n")
+    assert ROW["link"] in payload["caption"]
+    assert "Link de afiliado" in payload["caption"]
+    assert "Preço e disponibilidade podem mudar" in payload["caption"]
+
+
+def test_build_payload_rejects_overlong_custom_callout():
+    with pytest.raises(telegram.TelegramPublisherError, match="180 caracteres"):
+        telegram.build_telegram_payload({**ROW, "chamada": "x" * 181}, "@AchadinhosPublicos")
+
+
 def test_build_payload_uses_text_when_image_is_not_public_https():
     payload = telegram.build_telegram_payload({**ROW, "imagem_url": "http://example.com/image.jpg"}, -1001234567890)
     assert payload["method"] == "sendMessage"

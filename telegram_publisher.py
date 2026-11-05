@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import requests
+from offer_copy import get_custom_callout
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 REQUEST_TIMEOUT = 30
@@ -109,6 +110,9 @@ def build_telegram_payload(row: Any, chat_id: Any) -> dict[str, Any]:
         price = _text(row.get("preco"))
         link = row.get("link")
         image = _text(row.get("imagem_url"))
+        callout = get_custom_callout(row)
+    except ValueError as exc:
+        raise TelegramPublisherError(str(exc)) from None
     except Exception:
         raise TelegramPublisherError("Não foi possível ler os dados do produto para o Telegram.") from None
 
@@ -119,7 +123,8 @@ def build_telegram_payload(row: Any, chat_id: Any) -> dict[str, Any]:
 
     # Do not modify link, even to trim whitespace: invalid surrounding spaces
     # are rejected by validation, while valid input remains exactly as supplied.
-    message = f"{name}\nPreço: {price}\n\n{AFFILIATE_DISCLOSURE}\n\n{link}"
+    intro = f"{callout}\n\n" if callout else ""
+    message = f"{intro}{name}\nPreço: {price}\n\n{AFFILIATE_DISCLOSURE}\n\n{link}"
     if _valid_https_url(image) and len(message) <= 1024:
         return {
             "method": "sendPhoto",

@@ -30,6 +30,23 @@ def test_build_pin_payload_preserves_affiliate_link_and_discloses_commission():
     assert payload["alt_text"].startswith("Imagem do produto:")
 
 
+def test_build_pin_payload_includes_custom_callout_and_keeps_affiliate_disclosure():
+    callout = "Uma opção prática para organizar a casa"
+    payload = pinterest.build_pin_payload({**ROW, "chamada": callout}, "123456789")
+
+    assert payload["description"].startswith(callout + "\n\n")
+    assert ROW["link"] == payload["link"]
+    assert "Link de afiliado" in payload["description"]
+    assert "Preço e disponibilidade podem mudar" in payload["description"]
+
+
+def test_build_pin_payload_rejects_overlong_callout_and_never_truncates_disclosure():
+    with pytest.raises(pinterest.PinterestPublisherError, match="180 caracteres"):
+        pinterest.build_pin_payload({**ROW, "chamada": "x" * 181}, "123456789")
+    with pytest.raises(pinterest.PinterestPublisherError, match="limite de 800"):
+        pinterest.build_pin_payload({**ROW, "nome": "x" * 900}, "123456789")
+
+
 @pytest.mark.parametrize(
     ("row", "board", "message"),
     [

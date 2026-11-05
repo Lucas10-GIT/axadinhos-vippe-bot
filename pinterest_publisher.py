@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import requests
+from offer_copy import get_custom_callout
 
 CREATE_PIN_URL = "https://api.pinterest.com/v5/pins"
 
@@ -62,6 +63,10 @@ def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
     link = _text(row.get("link"))
     image = _text(row.get("imagem_url"))
     board = _text(board_id)
+    try:
+        callout = get_custom_callout(row)
+    except ValueError as exc:
+        raise PinterestPublisherError(str(exc)) from None
 
     if not name or not price:
         raise PinterestPublisherError("Pinterest exige nome e preço revisados para esta oferta.")
@@ -76,7 +81,12 @@ def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
         "Link de afiliado: posso receber comissão por compras feitas por este link, sem custo adicional. "
         "Preço e disponibilidade podem mudar na Shopee."
     )
-    description = f"{name}\n\nPreço: {price}\n\n{disclosure}"[:800]
+    description_parts = [callout, f"{name}\n\nPreço: {price}", disclosure]
+    description = "\n\n".join(part for part in description_parts if part)
+    if len(description) > 800:
+        raise PinterestPublisherError(
+            "A descrição excede o limite de 800 caracteres; encurte o nome, o preço ou a chamada."
+        )
     return {
         "board_id": board,
         "title": name[:100],

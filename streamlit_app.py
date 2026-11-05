@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 import streamlit as st
+from offer_copy import MAX_CALLOUT_CHARS, get_custom_callout
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
 from shopee_affiliate_api import ShopeeAffiliateAPIError, check_connection as test_shopee_affiliate_api_connection
 from publisher import (
@@ -28,7 +29,7 @@ BRANCH = "main"
 DATA_PATH = "data/products.csv"
 
 COLS = [
-    "id", "nome", "preco", "link", "imagem_url", "categoria", "comissao",
+    "id", "nome", "preco", "link", "imagem_url", "categoria", "chamada", "comissao",
     "ativo", "aprovado_publicacao", "status_publicacao", "frequencia_dias",
     "cliques", "pedidos", "comissao_estimada", "ultima_publicacao",
     "proxima_publicacao", "ultima_tentativa", "telegram_message_id", "telegram_status",
@@ -49,7 +50,7 @@ def clean(df):
     df = df.copy()
     defaults = {
         "id": "", "nome": "", "preco": "", "link": "", "imagem_url": "",
-        "categoria": "", "comissao": 0, "ativo": True,
+        "categoria": "", "chamada": "", "comissao": 0, "ativo": True,
         "aprovado_publicacao": False, "status_publicacao": "pronto", "frequencia_dias": 3,
         "cliques": 0, "pedidos": 0, "comissao_estimada": 0,
         "ultima_publicacao": "", "proxima_publicacao": "",
@@ -81,6 +82,7 @@ def clean(df):
         lambda value: parse_bool(value, default=False)
     )
     df["status_publicacao"] = df["status_publicacao"].fillna("pronto").astype(str).str.strip().str.casefold()
+    df["chamada"] = df["chamada"].fillna("").astype(str)
     df["telegram_status"] = df["telegram_status"].fillna("pendente").astype(str).str.strip().str.casefold()
     df["pinterest_status"] = df["pinterest_status"].fillna("pendente").astype(str).str.strip().str.casefold()
     df.loc[df["telegram_message_id"].fillna("").astype(str).str.strip().ne(""), "telegram_status"] = "enviado"
@@ -133,13 +135,33 @@ def save(df, sha):
 
 
 def ad_preview(row):
-    return "\n".join(
-        [
-            str(row.get("nome") or "Achadinho"),
-            f"Preço: {row.get('preco') or 'não informado'}",
-            "Link de afiliado; posso receber comissão sem custo adicional para você.",
-        ]
-    )
+    try:
+        callout = get_custom_callout(row)
+    except ValueError as exc:
+        return f"Chamada inválida: {exc}"
+
+    def preview_value(key, fallback):
+        value = row.get(key, "")
+        try:
+            if pd.isna(value):
+                return fallback
+        except (TypeError, ValueError):
+            pass
+        text = str(value).strip()
+        return text or fallback
+
+    name = preview_value("nome", "Achadinho")
+    price = preview_value("preco", "não informado")
+    link = preview_value("link", "Link de afiliado não informado")
+    parts = [
+        callout,
+        name,
+        f"Preço: {price}",
+        "Link de afiliado: posso receber comissão por compras feitas por este link, sem custo adicional. "
+        "Preço e disponibilidade podem mudar.",
+        link,
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def classify(row):
@@ -335,6 +357,11 @@ with products:
         column_config={
             "link": st.column_config.LinkColumn("Link Shopee"),
             "imagem_url": st.column_config.LinkColumn("Link da foto"),
+            "chamada": st.column_config.TextColumn(
+                "Chamada personalizada",
+                max_chars=MAX_CALLOUT_CHARS,
+                help="Opcional: uma frase curta e verificável. O sistema sempre acrescenta preço, link e aviso de afiliado.",
+            ),
             "ativo": st.column_config.CheckboxColumn("Ativo"),
             "aprovado_publicacao": st.column_config.CheckboxColumn("Aprovado para publicação"),
             "status_publicacao": st.column_config.SelectboxColumn(
@@ -483,9 +510,8 @@ with ads:
     if len(df):
         selected_name = st.selectbox("Produto", df["nome"].tolist())
         selected_row = df[df["nome"] == selected_name].iloc[0]
-        st.text(ad_preview(selected_row))
-        if selected_row.get("link"):
-            st.caption(f"Link de afiliado original: {selected_row['link']}")
+        st.caption("Edite a chamada opcional na aba Produtos. O link original e o aviso de afiliado são mantidos no texto.")
+        st.code(ad_preview(selected_row), language=None)
     else:
         st.info("Cadastre produtos primeiro.")
 

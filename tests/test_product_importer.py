@@ -190,6 +190,7 @@ def test_import_preserves_affiliate_link_and_never_approves_or_activates():
     assert row["nome"] == "Kit de Cozinha"
     assert row["preco"] == "R$ 78,90"
     assert row["categoria"] == "Casa e Cozinha"
+    assert row["chamada"] == ""
     assert row["ativo"] is False
     assert row["aprovado_publicacao"] is False
     assert row["status_publicacao"] == "pronto"

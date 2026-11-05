@@ -587,6 +587,7 @@ def import_product_links(
             "link": link,
             "imagem_url": info.get("imagem_url", ""),
             "categoria": info.get("categoria", ""),
+            "chamada": "",
             "comissao": 0,
             "ativo": False,
             "aprovado_publicacao": False,
