@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 import streamlit as st
+from dashboard_metrics import (
+    build_attention_items,
+    build_category_performance,
+    build_dashboard_kpis,
+    build_top_products,
+)
 from offer_copy import MAX_CALLOUT_CHARS, get_custom_callout
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
 from shopee_affiliate_api import ShopeeAffiliateAPIError, check_connection as test_shopee_affiliate_api_connection
@@ -164,16 +170,6 @@ def ad_preview(row):
     return "\n\n".join(part for part in parts if part)
 
 
-def classify(row):
-    clicks = int(row["cliques"])
-    orders = int(row["pedidos"])
-    if orders >= 2 or (orders >= 1 and clicks >= 20):
-        return "🏆 Vencedor"
-    if clicks >= 10:
-        return "🟡 Em teste"
-    return "⚪ Novo"
-
-
 df, sha, cloud = load()
 
 # Keep edits/import drafts between Streamlit reruns, but reload if the GitHub
@@ -198,43 +194,66 @@ if not cloud:
 panel, products, ads, channels_tab = st.tabs(["📊 Painel", "📋 Produtos", "📢 Anúncios", "📣 Canais"])
 
 with panel:
-    product_col, active_col, orders_col, commission_col = st.columns(4)
-    product_col.metric("Produtos", len(df))
-    active_col.metric("Ativos", int(df["ativo"].sum()) if len(df) else 0)
-    orders_col.metric("Pedidos", int(df["pedidos"].sum()) if len(df) else 0)
-    commission_col.metric(
-        "Comissão", f"R$ {df['comissao_estimada'].sum():.2f}" if len(df) else "R$ 0,00"
-    )
-    telegram_col, pinterest_col, unapproved_col = st.columns(3)
-    telegram_col.metric(
-        "Posts Telegram registrados",
-        int(df["telegram_status"].eq("enviado").sum()) if len(df) else 0,
-    )
-    pinterest_col.metric(
-        "Pins registrados",
-        int(df["pinterest_status"].eq("enviado").sum()) if len(df) else 0,
-    )
-    unapproved_col.metric(
-        "Produtos sem aprovação",
-        int((~df["aprovado_publicacao"]).sum()) if len(df) else 0,
-    )
-    if len(df):
-        summary = df.copy()
-        summary["status"] = summary.apply(classify, axis=1)
-        summary["score"] = (
-            summary["pedidos"] * 5
-            + summary["comissao_estimada"]
-            + (summary["pedidos"] / summary["cliques"].replace(0, 1)) * 100
+    dashboard = build_dashboard_kpis(df)
+    st.subheader("Visão geral")
+    st.caption("Resumo do catálogo e do desempenho registrado. Os indicadores não publicam nem alteram produtos.")
+    with st.container(border=True):
+        product_col, approved_col, attention_col, commission_col = st.columns(4)
+        product_col.metric("Produtos no catálogo", dashboard["products"])
+        approved_col.metric("Ativos e aprovados", dashboard["active_approved"])
+        attention_col.metric("Produtos com pendências", dashboard["attention"])
+        commission_col.metric(
+            "Comissão estimada",
+            f"R$ {dashboard['commission']:.2f}".replace(".", ","),
         )
-        st.dataframe(
-            summary[["nome", "cliques", "pedidos", "comissao_estimada", "status", "score"]]
-            .sort_values("score", ascending=False),
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("Adicione seu primeiro produto na aba Produtos.")
 
+    with st.container(border=True):
+        st.markdown("**Atividade registrada**")
+        clicks_col, orders_col, telegram_col, pinterest_col = st.columns(4)
+        clicks_col.metric("Cliques", dashboard["clicks"])
+        orders_col.metric("Pedidos", dashboard["orders"])
+        telegram_col.metric("Posts Telegram", dashboard["telegram_posts"])
+        pinterest_col.metric("Pins Pinterest", dashboard["pinterest_pins"])
+
+    attention_col, performance_col = st.columns([1, 1.25], gap="large")
+    with attention_col:
+        with st.container(border=True):
+            st.subheader("Atenção agora")
+            attention_items = build_attention_items(df, limit=6)
+            if attention_items.empty:
+                st.success("Nenhuma pendência de envio, aprovação, ativação ou dados incompletos.")
+            else:
+                st.dataframe(attention_items, width="stretch", hide_index=True)
+                if dashboard["attention"] > len(attention_items):
+                    st.caption(
+                        f"Mostrando {len(attention_items)} de {dashboard['attention']} itens. "
+                        "Consulte a aba Produtos para revisar o restante."
+                    )
+            st.caption("Esta lista é informativa; os estados só mudam quando você os edita na aba Produtos.")
+
+    with performance_col:
+        with st.container(border=True):
+            st.subheader("Produtos com atividade")
+            top_products = build_top_products(df, limit=5)
+            if top_products.empty:
+                st.info("Ainda não há cliques, pedidos ou comissões registrados para comparar produtos.")
+            else:
+                st.dataframe(top_products, width="stretch", hide_index=True)
+                st.caption("A pontuação usa o mesmo cálculo do publicador para manter a prioridade consistente.")
+
+            st.markdown("**Desempenho por categoria**")
+            category_metrics = build_category_performance(df)
+            if not category_metrics.empty and int(category_metrics[["Cliques", "Pedidos"]].to_numpy().sum()) > 0:
+                st.bar_chart(
+                    category_metrics.head(8).set_index("Categoria")[["Cliques", "Pedidos"]],
+                    horizontal=True,
+                    height=260,
+                    width="stretch",
+                )
+            else:
+                st.info("O gráfico aparecerá quando houver cliques ou pedidos reais registrados.")
+
+    st.divider()
     st.subheader("Fila manual estimada")
     st.caption(
         "Prévia dos produtos que o publicador escolheria para os canais manuais habilitados. "
