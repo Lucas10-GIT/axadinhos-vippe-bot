@@ -1,16 +1,19 @@
-"""Copy-ready offer drafts for platforms that are not connected to an API."""
+"""Platform-specific, copy-ready affiliate offer drafts; no publishing occurs here."""
 from __future__ import annotations
 
 import math
+import re
+import unicodedata
 from typing import Any
 from urllib.parse import urlsplit
 
 from offer_copy import get_custom_callout
 
 AFFILIATE_DISCLOSURE = (
-    "Aviso de afiliado: posso receber comissão por compras feitas por este link, "
-    "sem custo adicional. Preço e disponibilidade podem mudar."
+    "Aviso de afiliado: posso receber comissão se você comprar por um link de afiliado, "
+    "sem custo extra. Preço e disponibilidade podem mudar."
 )
+MAX_SOCIAL_TITLE_CHARS = 72
 
 
 class SocialCopyError(ValueError):
@@ -25,8 +28,18 @@ def _text(value: Any) -> str:
             return ""
     except (TypeError, ValueError):
         pass
-    text = str(value).strip()
+    text = re.sub(r"\s+", " ", str(value)).strip()
     return "" if text.casefold() in {"nan", "<na>"} else text
+
+
+def _compact_title(value: Any, limit: int = MAX_SOCIAL_TITLE_CHARS) -> str:
+    text = _text(value)
+    if len(text) <= limit:
+        return text
+    shortened = text[: limit - 1].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    if len(shortened) < limit // 2:
+        shortened = text[: limit - 1].rstrip(" ,;:-")
+    return shortened + "…"
 
 
 def _valid_shopee_link(value: Any) -> bool:
@@ -55,18 +68,44 @@ def _valid_shopee_link(value: Any) -> bool:
     )
 
 
-def build_manual_copies(row: Any) -> dict[str, str]:
-    """Build manual drafts; no API calls or platform publishing happen here.
+def _category_hashtag(value: Any) -> str:
+    category = _text(value)
+    if not category:
+        return ""
+    ascii_text = unicodedata.normalize("NFKD", category).encode("ascii", "ignore").decode("ascii")
+    stop_words = {"e", "de", "da", "do", "das", "dos", "para"}
+    words = [
+        word
+        for word in re.findall(r"[A-Za-z0-9]+", ascii_text)
+        if word.casefold() not in stop_words
+    ]
+    if not words:
+        return ""
+    tag = "#" + "".join(word[:1].upper() + word[1:] for word in words[:3])
+    return tag if len(tag) <= 30 else ""
 
-    The original affiliate URL is included in WhatsApp and Instagram copy. For
-    TikTok it is returned separately so it is not inserted into the video or
-    caption; the user can place it only in a platform surface where links are
-    permitted. Commercial-content disclosure must still be enabled in TikTok.
+
+def _hashtags(category: Any) -> str:
+    tags = ["#Achadinhos", "#Ofertas"]
+    category_tag = _category_hashtag(category)
+    if category_tag and category_tag.casefold() not in {tag.casefold() for tag in tags}:
+        tags.append(category_tag)
+    return " ".join(tags)
+
+
+def build_manual_copies(row: Any) -> dict[str, str]:
+    """Build concise channel-specific drafts while preserving the submitted link.
+
+    WhatsApp receives the original affiliate URL in its message. Instagram and
+    TikTok captions use platform-appropriate bio/profile calls to action, while
+    the same URL is returned separately for the user to place where links are
+    supported. This function never publishes or calls a network service.
     """
     try:
-        name = _text(row.get("nome"))
+        name = _compact_title(row.get("nome"))
         price = _text(row.get("preco"))
         link = row.get("link")
+        category = _text(row.get("categoria"))
         callout = get_custom_callout(row)
     except ValueError as exc:
         raise SocialCopyError(str(exc)) from None
@@ -78,18 +117,41 @@ def build_manual_copies(row: Any) -> dict[str, str]:
     if not _valid_shopee_link(link):
         raise SocialCopyError("O produto precisa ter um link HTTPS válido da Shopee.")
 
-    base = [callout, name, f"Preço: {price}"]
-    whatsapp = "\n\n".join([*base, AFFILIATE_DISCLOSURE, link])
-    instagram = "\n\n".join([*base, AFFILIATE_DISCLOSURE, f"Link do produto: {link}"])
+    opener = callout or "Confira este achadinho:"
+    hashtags = _hashtags(category)
+
+    whatsapp = "\n\n".join([
+        opener,
+        name,
+        f"Preço: {price}",
+        f"Veja a oferta na Shopee: {link}",
+        AFFILIATE_DISCLOSURE,
+    ])
+    instagram = "\n\n".join([
+        opener,
+        name,
+        f"Preço: {price}",
+        "Link da oferta na bio.",
+        AFFILIATE_DISCLOSURE,
+        hashtags,
+    ])
     tiktok = "\n\n".join([
-        *base,
-        "Aviso de afiliado: posso receber comissão. Preço e disponibilidade podem mudar.",
-        "Conteúdo promocional. Consulte a oferta pelo link do perfil.",
-        "A divulgação de conteúdo comercial deve ser ativada no próprio TikTok antes de publicar.",
+        opener,
+        name,
+        f"Preço: {price}",
+        "Confira a oferta pelo link do perfil.",
+        AFFILIATE_DISCLOSURE,
+        hashtags,
     ])
     return {
         "whatsapp": whatsapp,
         "instagram": instagram,
         "tiktok": tiktok,
+        "instagram_bio_link": link,
+        "tiktok_profile_link": link,
         "affiliate_link": link,
+        "hashtags": hashtags,
+        "tiktok_disclosure_reminder": (
+            "Antes de publicar, ative no TikTok a opção de divulgação de conteúdo comercial aplicável."
+        ),
     }

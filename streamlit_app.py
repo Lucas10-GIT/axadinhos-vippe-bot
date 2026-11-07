@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import hmac
 import io
 from datetime import datetime, timezone
@@ -28,6 +29,11 @@ from publisher import (
 from pinterest_publisher import PinterestPublisherError, build_pin_payload
 from social_copy import SocialCopyError, build_manual_copies
 from spreadsheet_exports import build_exports
+from whatsapp_webhook import (
+    WhatsAppDraftWebhookError,
+    send_whatsapp_draft_webhook,
+    verify_whatsapp_webhook_admin_pin,
+)
 
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
@@ -491,8 +497,19 @@ with ads:
             key="manual_copy_product_select",
         )
         selected_row = df.loc[product_labels[selected_label]]
+        whatsapp_webhook_enabled = parse_bool(
+            secret("whatsapp_draft_webhook_enabled", False), default=False
+        )
+        whatsapp_webhook_url = secret("whatsapp_draft_webhook_url")
+        whatsapp_webhook_secret = secret("whatsapp_draft_webhook_secret")
+        whatsapp_webhook_admin_pin = secret("whatsapp_draft_webhook_admin_pin")
+        selected_product_approved = (
+            parse_bool(selected_row.get("ativo", False), default=False)
+            and parse_bool(selected_row.get("aprovado_publicacao", False), default=False)
+        )
         st.caption(
-            "Escolha um formato e copie o rascunho. Esta aba não envia mensagens nem publica conteúdo. "
+            "Escolha um formato e copie o texto. Se habilitado, o botão WhatsApp encaminha um rascunho ao seu endpoint; "
+            "não envia mensagens nem publica conteúdo. "
             "A chamada personalizada, o preço e o link cadastrado são mantidos quando aplicável."
         )
         if not (
@@ -511,16 +528,78 @@ with ads:
                 "TikTok — texto manual",
             ])
             with whatsapp_tab:
-                st.caption("Rascunho copiável. Compartilhe somente com pessoas que aceitaram receber ofertas e respeite pedidos para parar.")
+                st.caption("Mensagem curta com link original. Compartilhe apenas com quem consentiu e respeite pedidos para parar.")
                 st.code(manual_copies["whatsapp"], language=None)
+                st.divider()
+                st.markdown("**Webhook opcional para preparar um rascunho**")
+                if not whatsapp_webhook_enabled:
+                    st.info("Desativado por padrão. O webhook só pode ser acionado manualmente após configuração nos Secrets.")
+                elif (
+                    not whatsapp_webhook_url
+                    or not whatsapp_webhook_secret
+                    or len(str(whatsapp_webhook_admin_pin)) < 16
+                ):
+                    st.warning("Webhook habilitado, mas faltam URL HTTPS, segredo HMAC e/ou PIN administrativo forte nos Secrets.")
+                elif not selected_product_approved:
+                    st.warning("O handoff exige produto ativo e aprovado manualmente.")
+                else:
+                    st.caption(
+                        "O app encaminha apenas um rascunho para seu endpoint. O payload não inclui destinatários, "
+                        "define send=false e não chama a API do WhatsApp."
+                    )
+                    product_key = str(selected_row.get("id", ""))
+                    draft_hash = hashlib.sha256(manual_copies["whatsapp"].encode("utf-8")).hexdigest()[:16]
+                    confirmation_key = f"whatsapp_draft_confirm_{product_key}_{draft_hash}"
+                    accepted_key = f"whatsapp_draft_accepted_{product_key}_{draft_hash}"
+                    if st.session_state.get(accepted_key):
+                        st.success("Este rascunho já foi aceito pelo endpoint nesta sessão; não o reenviamos automaticamente.")
+                    else:
+                        entered_admin_pin = st.text_input(
+                            "PIN administrativo do webhook",
+                            type="password",
+                            key=f"whatsapp_draft_admin_pin_{product_key}_{draft_hash}",
+                        )
+                        if not verify_whatsapp_webhook_admin_pin(
+                            entered_admin_pin,
+                            str(whatsapp_webhook_admin_pin),
+                        ):
+                            st.info("Informe o PIN administrativo configurado nos Secrets para desbloquear o handoff.")
+                        else:
+                            confirmed_handoff = st.checkbox(
+                                "Confirmo que controlo este endpoint HTTPS e que ele criará somente um rascunho, sem enviar mensagens.",
+                                key=confirmation_key,
+                            )
+                            if st.button(
+                                "Encaminhar rascunho ao webhook WhatsApp",
+                                disabled=not confirmed_handoff,
+                                key=f"whatsapp_draft_send_{product_key}_{draft_hash}",
+                            ):
+                                try:
+                                    send_whatsapp_draft_webhook(
+                                        selected_row,
+                                        enabled=whatsapp_webhook_enabled,
+                                        webhook_url=str(whatsapp_webhook_url),
+                                        signing_secret=str(whatsapp_webhook_secret),
+                                        session=requests,
+                                    )
+                                    st.session_state[accepted_key] = True
+                                    st.success(
+                                        "Endpoint aceitou o rascunho. Isso confirma somente o handoff HTTP; "
+                                        "não confirma envio nem entrega no WhatsApp."
+                                    )
+                                except WhatsAppDraftWebhookError as exc:
+                                    st.error(str(exc))
             with instagram_tab:
-                st.caption("A URL é preservada no texto, mas legendas do feed não tornam URLs clicáveis. Atualize o link do perfil se usar uma chamada para a bio.")
+                st.caption("Legenda enxuta com chamada para a bio; a URL afiliada fica separada para você colocar no perfil.")
                 st.code(manual_copies["instagram"], language=None)
+                st.markdown("**URL afiliada original — para o link da bio:**")
+                st.code(manual_copies["instagram_bio_link"], language=None)
             with tiktok_tab:
-                st.caption("A URL afiliada fica separada do texto. Use-a somente em um campo/perfil permitido; não sobreponha links ao vídeo e ative a divulgação comercial no app TikTok.")
+                st.caption("Texto curto com CTA para o perfil. Use a URL somente em uma superfície permitida e ative a divulgação comercial nativa do TikTok.")
                 st.code(manual_copies["tiktok"], language=None)
                 st.markdown("**URL afiliada original — separada da legenda:**")
-                st.code(manual_copies["affiliate_link"], language=None)
+                st.code(manual_copies["tiktok_profile_link"], language=None)
+                st.caption(manual_copies["tiktok_disclosure_reminder"])
     else:
         st.info("Cadastre produtos primeiro.")
 
@@ -528,14 +607,49 @@ with ads:
 with channels_tab:
     st.subheader("📣 Canais")
     st.write(
-        "WhatsApp, Instagram e TikTok estão disponíveis apenas para preparar textos copiáveis. "
-        "O app não tem conexão de envio por API, não publica nesses canais e não guarda listas de contatos."
+        "WhatsApp, Instagram e TikTok têm formatos copiáveis. O webhook opcional do WhatsApp só encaminha "
+        "um rascunho aprovado para um endpoint seu; não envia mensagens. Instagram e TikTok continuam sem APIs conectadas."
     )
     with st.container(border=True):
         st.markdown("**Preparação manual disponível**")
-        st.write("WhatsApp: mensagem com aviso de afiliado e link original; compartilhe apenas com quem consentiu em receber ofertas.")
-        st.write("Instagram: legenda com aviso e link original em texto; links em legendas do feed não são clicáveis.")
-        st.write("TikTok: texto sem URL inserida na legenda e URL afiliada exibida separadamente; ative a divulgação comercial no app antes de publicar.")
+        st.write("WhatsApp: mensagem curta com link original; compartilhe somente com quem consentiu em receber ofertas.")
+        st.write("Instagram: legenda com CTA para a bio; a URL original aparece separada para atualização manual do perfil.")
+        st.write("TikTok: texto compacto com CTA para o perfil; a URL fica separada e a divulgação comercial deve ser ativada no app.")
+
+    whatsapp_hook_enabled = parse_bool(secret("whatsapp_draft_webhook_enabled", False), default=False)
+    whatsapp_hook_url = secret("whatsapp_draft_webhook_url")
+    whatsapp_hook_secret = secret("whatsapp_draft_webhook_secret")
+    whatsapp_hook_admin_pin = secret("whatsapp_draft_webhook_admin_pin")
+    hook_ready = bool(
+        whatsapp_hook_url
+        and len(str(whatsapp_hook_secret)) >= 32
+        and len(str(whatsapp_hook_admin_pin)) >= 16
+    )
+    with st.expander("Webhook opcional de rascunho WhatsApp"):
+        st.caption(
+            "É um handoff manual de rascunho, não o webhook oficial de eventos da Meta e não uma conexão de envio. "
+            "O endpoint deve verificar HMAC e Idempotency-Key e respeitar send=false. Não será executado pelo cron."
+        )
+        st.code(
+            'whatsapp_draft_webhook_enabled = false\n'
+            'whatsapp_draft_webhook_url = "https://SEU-ENDPOINT-HTTPS/webhook/SEU-ID"\n'
+            'whatsapp_draft_webhook_secret = "CHAVE_ALEATORIA_DE_PELO_MENOS_32_CARACTERES"\n'
+            'whatsapp_draft_webhook_admin_pin = "PIN_ALEATORIO_PRIVADO_DE_PELO_MENOS_16_CARACTERES"',
+            language="toml",
+        )
+        st.write(
+            "Estado do webhook:",
+            (
+                "Ativo; campos mínimos presentes, URL validada no clique"
+                if whatsapp_hook_enabled and hook_ready
+                else "Desativado ou incompleto"
+            ),
+        )
+        st.info(
+            "A URL, a chave HMAC e o PIN administrativo são lidos apenas dos Secrets e nunca exibidos. "
+            "O PIN protege a ação no app público; use um valor aleatório privado com ao menos 16 caracteres. Configure somente um endpoint que você controla. "
+            "Nenhum telefone, contato ou consentimento individual é enviado no payload."
+        )
 
     github_token = secret("github_token")
     pinterest_token = secret("pinterest_access_token")
