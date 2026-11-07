@@ -19,7 +19,6 @@ BASE = {
     "ativo": True,
     "aprovado_publicacao": True,
     "status_publicacao": "pronto",
-    "telegram_status": "pendente",
     "pinterest_status": "pendente",
     "cliques": 20,
     "pedidos": 1,
@@ -29,7 +28,7 @@ BASE = {
 
 def test_dashboard_kpis_count_real_catalog_activity_and_attention():
     frame = pd.DataFrame([
-        {**BASE, "id": 1, "telegram_status": "enviado"},
+        {**BASE, "id": 1, "pinterest_status": "enviado"},
         {
             **BASE,
             "id": 2,
@@ -37,7 +36,6 @@ def test_dashboard_kpis_count_real_catalog_activity_and_attention():
             "ativo": False,
             "aprovado_publicacao": False,
             "status_publicacao": "revisar",
-            "telegram_status": "revisar",
             "pinterest_status": "enviado",
             "cliques": 0,
             "pedidos": 0,
@@ -53,8 +51,7 @@ def test_dashboard_kpis_count_real_catalog_activity_and_attention():
         "attention": 1,
         "clicks": 20,
         "orders": 1,
-        "telegram_posts": 1,
-        "pinterest_pins": 1,
+        "pinterest_pins": 2,
         "commission": 4.5,
     }
 

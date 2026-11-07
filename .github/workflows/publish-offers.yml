@@ -1,23 +1,17 @@
-name: Publicar ofertas aprovadas nos canais habilitados
+name: Publicar ofertas aprovadas no Pinterest
 
 on:
-  # O GitHub pode atrasar cron; a trava global de quatro horas também existe no estado do CSV.
   schedule:
     - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
       confirm_publish:
-        description: "Confirme para publicar uma oferta real nos canais selecionados."
-        type: boolean
-        required: true
-        default: false
-      publish_telegram:
-        description: "Enviar também ao destino Telegram configurado (novo bot)."
+        description: "Confirme para criar um Pin público real."
         type: boolean
         required: true
         default: false
       publish_pinterest:
-        description: "Criar também um Pin linkado no board configurado."
+        description: "Criar um Pin linkado no board configurado."
         type: boolean
         required: true
         default: false
@@ -26,22 +20,21 @@ permissions:
   contents: read
 
 concurrency:
-  group: axadinhos-channel-publish
+  group: axadinhos-pinterest-publish
   cancel-in-progress: false
 
 jobs:
   publish:
-    name: Processar CSV e publicar no máximo uma oferta por execução
+    name: Processar CSV e criar no máximo um Pin por execução
     if: >-
       ${{
         github.ref == 'refs/heads/main' &&
         ((github.event_name == 'schedule' &&
           vars.AXADINHOS_AUTO_PUBLISH == 'true' &&
-          (vars.AXADINHOS_TELEGRAM_AUTO_PUBLISH == 'true' ||
-           vars.AXADINHOS_PINTEREST_AUTO_PUBLISH == 'true')) ||
+          vars.AXADINHOS_PINTEREST_AUTO_PUBLISH == 'true') ||
          (github.event_name == 'workflow_dispatch' &&
           inputs.confirm_publish == true &&
-          (inputs.publish_telegram == true || inputs.publish_pinterest == true)))
+          inputs.publish_pinterest == true))
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -56,15 +49,11 @@ jobs:
           python-version: "3.12"
       - name: Instalar dependências
         run: python -m pip install -r requirements.txt
-      - name: Publicar uma oferta nos destinos selecionados
+      - name: Criar Pin linkado
         run: python publisher.py
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # Usa nomes novos, independentes dos Secrets Telegram antigos.
-          TELEGRAM_PUBLISHER_BOT_TOKEN: ${{ secrets.TELEGRAM_PUBLISHER_BOT_TOKEN }}
-          TELEGRAM_PUBLISHER_CHAT_ID: ${{ secrets.TELEGRAM_PUBLISHER_CHAT_ID }}
-          TELEGRAM_PUBLISH_ENABLED: ${{ (github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true' && vars.AXADINHOS_TELEGRAM_AUTO_PUBLISH == 'true') || (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true && inputs.publish_telegram == true) }}
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
           PINTEREST_PUBLISH_ENABLED: ${{ (github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true' && vars.AXADINHOS_PINTEREST_AUTO_PUBLISH == 'true') || (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true && inputs.publish_pinterest == true) }}
-          PUBLISH_CONFIRMED: ${{ (github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true' && (vars.AXADINHOS_TELEGRAM_AUTO_PUBLISH == 'true' || vars.AXADINHOS_PINTEREST_AUTO_PUBLISH == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true && (inputs.publish_telegram == true || inputs.publish_pinterest == true)) }}
+          PUBLISH_CONFIRMED: ${{ (github.event_name == 'schedule' && vars.AXADINHOS_AUTO_PUBLISH == 'true' && vars.AXADINHOS_PINTEREST_AUTO_PUBLISH == 'true') || (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == true && inputs.publish_pinterest == true) }}

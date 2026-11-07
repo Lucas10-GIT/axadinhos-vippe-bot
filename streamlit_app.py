@@ -12,7 +12,7 @@ from dashboard_metrics import (
     build_dashboard_kpis,
     build_top_products,
 )
-from offer_copy import MAX_CALLOUT_CHARS, get_custom_callout
+from offer_copy import MAX_CALLOUT_CHARS
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
 from shopee_affiliate_api import ShopeeAffiliateAPIError, check_connection as test_shopee_affiliate_api_connection
 from publisher import (
@@ -26,7 +26,7 @@ from publisher import (
     score,
 )
 from pinterest_publisher import PinterestPublisherError, build_pin_payload
-from telegram_publisher import TelegramPublisherError, build_telegram_payload
+from social_copy import SocialCopyError, build_manual_copies
 from spreadsheet_exports import build_exports
 
 OWNER = "Lucas10-GIT"
@@ -38,8 +38,7 @@ COLS = [
     "id", "nome", "preco", "link", "imagem_url", "categoria", "chamada", "comissao",
     "ativo", "aprovado_publicacao", "status_publicacao", "frequencia_dias",
     "cliques", "pedidos", "comissao_estimada", "ultima_publicacao",
-    "proxima_publicacao", "ultima_tentativa", "telegram_message_id", "telegram_status",
-    "pinterest_status", "pinterest_pin_id",
+    "proxima_publicacao", "ultima_tentativa", "pinterest_status", "pinterest_pin_id",
 ]
 
 st.set_page_config(page_title="Axadinhos Vippe", page_icon="👑", layout="wide")
@@ -60,8 +59,7 @@ def clean(df):
         "aprovado_publicacao": False, "status_publicacao": "pronto", "frequencia_dias": 3,
         "cliques": 0, "pedidos": 0, "comissao_estimada": 0,
         "ultima_publicacao": "", "proxima_publicacao": "",
-        "ultima_tentativa": "", "telegram_message_id": "", "telegram_status": "pendente",
-        "pinterest_status": "pendente", "pinterest_pin_id": "",
+        "ultima_tentativa": "", "pinterest_status": "pendente", "pinterest_pin_id": "",
     }
     for column, default in defaults.items():
         if column not in df.columns:
@@ -89,13 +87,10 @@ def clean(df):
     )
     df["status_publicacao"] = df["status_publicacao"].fillna("pronto").astype(str).str.strip().str.casefold()
     df["chamada"] = df["chamada"].fillna("").astype(str)
-    df["telegram_status"] = df["telegram_status"].fillna("pendente").astype(str).str.strip().str.casefold()
     df["pinterest_status"] = df["pinterest_status"].fillna("pendente").astype(str).str.strip().str.casefold()
-    df.loc[df["telegram_message_id"].fillna("").astype(str).str.strip().ne(""), "telegram_status"] = "enviado"
     df.loc[df["pinterest_pin_id"].fillna("").astype(str).str.strip().ne(""), "pinterest_status"] = "enviado"
     no_channel_receipt = (
         df["status_publicacao"].eq("enviado")
-        & df["telegram_message_id"].fillna("").astype(str).str.strip().eq("")
         & df["pinterest_pin_id"].fillna("").astype(str).str.strip().eq("")
     )
     df.loc[no_channel_receipt, "status_publicacao"] = "revisar"
@@ -140,36 +135,6 @@ def save(df, sha):
     return True, "Base salva."
 
 
-def ad_preview(row):
-    try:
-        callout = get_custom_callout(row)
-    except ValueError as exc:
-        return f"Chamada inválida: {exc}"
-
-    def preview_value(key, fallback):
-        value = row.get(key, "")
-        try:
-            if pd.isna(value):
-                return fallback
-        except (TypeError, ValueError):
-            pass
-        text = str(value).strip()
-        return text or fallback
-
-    name = preview_value("nome", "Achadinho")
-    price = preview_value("preco", "não informado")
-    link = preview_value("link", "Link de afiliado não informado")
-    parts = [
-        callout,
-        name,
-        f"Preço: {price}",
-        "Link de afiliado: posso receber comissão por compras feitas por este link, sem custo adicional. "
-        "Preço e disponibilidade podem mudar.",
-        link,
-    ]
-    return "\n\n".join(part for part in parts if part)
-
-
 df, sha, cloud = load()
 
 # Keep edits/import drafts between Streamlit reruns, but reload if the GitHub
@@ -185,7 +150,7 @@ elif st.session_state["products_base_sha"] != sha:
     st.session_state["products_remote_refresh"] = True
 
 st.title("👑 Axadinhos Vippe")
-st.caption("Produtos, aprovação de ofertas, anúncios e desempenho")
+st.caption("Produtos, aprovação manual, conteúdo copiável e Pins do Pinterest")
 if st.session_state.pop("products_remote_refresh", False):
     st.warning("A base mudou no GitHub. Recarregamos os dados mais recentes para evitar sobrescrever atualizações.")
 if not cloud:
@@ -209,10 +174,9 @@ with panel:
 
     with st.container(border=True):
         st.markdown("**Atividade registrada**")
-        clicks_col, orders_col, telegram_col, pinterest_col = st.columns(4)
+        clicks_col, orders_col, pinterest_col = st.columns(3)
         clicks_col.metric("Cliques", dashboard["clicks"])
         orders_col.metric("Pedidos", dashboard["orders"])
-        telegram_col.metric("Posts Telegram", dashboard["telegram_posts"])
         pinterest_col.metric("Pins Pinterest", dashboard["pinterest_pins"])
 
     attention_col, performance_col = st.columns([1, 1.25], gap="large")
@@ -256,27 +220,22 @@ with panel:
     st.divider()
     st.subheader("Fila manual estimada")
     st.caption(
-        "Prévia dos produtos que o publicador escolheria para os canais manuais habilitados. "
-        "A fila não publica nada e pode mudar após uma edição ou execução do workflow agendado."
+        "Prévia somente leitura dos produtos elegíveis para o Pinterest. Os textos de WhatsApp, Instagram "
+        "e TikTok são preparados manualmente na aba Anúncios e não entram nesta fila."
     )
     manual_channels = enabled_channels({
-        "TELEGRAM_PUBLISH_ENABLED": parse_bool(
-            secret("telegram_publish_enabled", False), default=False
-        ),
         "PINTEREST_PUBLISH_ENABLED": parse_bool(
             secret("pinterest_publish_enabled", False), default=False
         ),
     })
     manual_credentials_ready = bool(secret("github_token")) and bool(manual_channels) and all(
-        (secret("telegram_publisher_bot_token") and secret("telegram_publisher_chat_id"))
-        if channel == "telegram"
-        else (secret("pinterest_access_token") and secret("pinterest_board_id"))
+        secret("pinterest_access_token") and secret("pinterest_board_id")
         for channel in manual_channels
     )
     if not manual_channels:
-        st.info("Habilite pelo menos um canal manual na aba Canais para visualizar a fila manual.")
+        st.info("Habilite o opt-in manual do Pinterest na aba Canais para visualizar a fila de Pins.")
     elif not manual_credentials_ready:
-        st.warning("A fila manual ficará disponível quando o acesso ao GitHub e os Secrets dos canais habilitados estiverem configurados.")
+        st.warning("A fila ficará disponível quando o acesso ao GitHub e os Secrets do Pinterest estiverem configurados.")
     else:
         queue_now = datetime.now(timezone.utc)
         due_items = rank_candidates(df, queue_now, manual_channels)
@@ -294,8 +253,7 @@ with panel:
                     "ID": int(row["id"]),
                     "Produto": row["nome"],
                     "Preço": row["preco"],
-                    "Telegram": row["telegram_status"] if "telegram" in manual_channels else "—",
-                    "Pinterest": row["pinterest_status"] if "pinterest" in manual_channels else "—",
+                    "Pinterest": row["pinterest_status"],
                     "Score": round(score(row), 2),
                 })
             st.dataframe(
@@ -304,11 +262,10 @@ with panel:
                 hide_index=True,
             )
             st.caption(
-                "O publicador envia no máximo uma oferta por execução. O workflow do GitHub tem opt-ins "
-                "separados e não aparece nesta fila manual."
+                "O publicador cria no máximo um Pin por execução; o workflow agendado permanece separado e bloqueado por opt-in."
             )
         else:
-            st.info("Nenhuma oferta está ativa, aprovada e elegível para os canais manuais selecionados.")
+            st.info("Nenhuma oferta está ativa, aprovada e elegível para o Pinterest.")
 
 with products:
     st.subheader("📋 Planilha de produtos")
@@ -386,16 +343,13 @@ with products:
             "status_publicacao": st.column_config.SelectboxColumn(
                 "Estado da publicação", options=["pronto", "enviando", "enviado", "revisar"]
             ),
-            "telegram_status": st.column_config.SelectboxColumn(
-                "Status Telegram", options=["pendente", "enviado", "revisar"]
-            ),
             "pinterest_status": st.column_config.SelectboxColumn(
                 "Status Pinterest", options=["pendente", "enviado", "revisar"]
             ),
             "frequencia_dias": st.column_config.NumberColumn("Dias", min_value=1, max_value=30),
             "comissao_estimada": st.column_config.NumberColumn("Comissão", format="R$ %.2f"),
         },
-        disabled=["id", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "telegram_message_id", "pinterest_pin_id"],
+        disabled=["id", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "pinterest_pin_id"],
     )
     edited = clean(edited)
     st.caption(
@@ -527,61 +481,77 @@ with products:
 
 with ads:
     if len(df):
-        selected_name = st.selectbox("Produto", df["nome"].tolist())
-        selected_row = df[df["nome"] == selected_name].iloc[0]
-        st.caption("Edite a chamada opcional na aba Produtos. O link original e o aviso de afiliado são mantidos no texto.")
-        st.code(ad_preview(selected_row), language=None)
+        product_labels = {
+            f"{int(row['id'])} — {row['nome']}": index
+            for index, row in df.iterrows()
+        }
+        selected_label = st.selectbox(
+            "Produto para preparar",
+            list(product_labels),
+            key="manual_copy_product_select",
+        )
+        selected_row = df.loc[product_labels[selected_label]]
+        st.caption(
+            "Escolha um formato e copie o rascunho. Esta aba não envia mensagens nem publica conteúdo. "
+            "A chamada personalizada, o preço e o link cadastrado são mantidos quando aplicável."
+        )
+        if not (
+            parse_bool(selected_row.get("ativo", False), default=False)
+            and parse_bool(selected_row.get("aprovado_publicacao", False), default=False)
+        ):
+            st.info("Este item ainda não está ativo e aprovado. O texto é apenas uma prévia; revise e aprove antes de publicar por conta própria.")
+        try:
+            manual_copies = build_manual_copies(selected_row)
+        except SocialCopyError as exc:
+            st.warning(str(exc))
+        else:
+            whatsapp_tab, instagram_tab, tiktok_tab = st.tabs([
+                "WhatsApp — mensagem",
+                "Instagram — legenda",
+                "TikTok — texto manual",
+            ])
+            with whatsapp_tab:
+                st.caption("Rascunho copiável. Compartilhe somente com pessoas que aceitaram receber ofertas e respeite pedidos para parar.")
+                st.code(manual_copies["whatsapp"], language=None)
+            with instagram_tab:
+                st.caption("A URL é preservada no texto, mas legendas do feed não tornam URLs clicáveis. Atualize o link do perfil se usar uma chamada para a bio.")
+                st.code(manual_copies["instagram"], language=None)
+            with tiktok_tab:
+                st.caption("A URL afiliada fica separada do texto. Use-a somente em um campo/perfil permitido; não sobreponha links ao vídeo e ative a divulgação comercial no app TikTok.")
+                st.code(manual_copies["tiktok"], language=None)
+                st.markdown("**URL afiliada original — separada da legenda:**")
+                st.code(manual_copies["affiliate_link"], language=None)
     else:
         st.info("Cadastre produtos primeiro.")
 
 
 with channels_tab:
-    st.subheader("📣 Canais de publicação")
+    st.subheader("📣 Canais")
     st.write(
-        "Telegram e Pinterest são destinos opcionais. Um clique envia sequencialmente apenas para os canais "
-        "habilitados; a entrega não é simultânea nem atômica."
+        "WhatsApp, Instagram e TikTok estão disponíveis apenas para preparar textos copiáveis. "
+        "O app não tem conexão de envio por API, não publica nesses canais e não guarda listas de contatos."
     )
+    with st.container(border=True):
+        st.markdown("**Preparação manual disponível**")
+        st.write("WhatsApp: mensagem com aviso de afiliado e link original; compartilhe apenas com quem consentiu em receber ofertas.")
+        st.write("Instagram: legenda com aviso e link original em texto; links em legendas do feed não são clicáveis.")
+        st.write("TikTok: texto sem URL inserida na legenda e URL afiliada exibida separadamente; ative a divulgação comercial no app antes de publicar.")
 
     github_token = secret("github_token")
-    telegram_token = secret("telegram_publisher_bot_token")
-    telegram_chat_id = secret("telegram_publisher_chat_id")
-    telegram_enabled = parse_bool(secret("telegram_publish_enabled", False), default=False)
     pinterest_token = secret("pinterest_access_token")
     pinterest_board_id = secret("pinterest_board_id")
     pinterest_enabled = parse_bool(secret("pinterest_publish_enabled", False), default=False)
 
+    st.divider()
+    st.subheader("Pinterest — Pin linkado")
+    st.caption("Este é o único canal conectado para publicação real. Cada Pin leva ao link afiliado original. O botão cria conteúdo público, sem modo de teste.")
     st.write("GitHub — acesso à base:", "✅" if github_token else "❌")
-    st.write("Telegram — token do bot novo:", "✅" if telegram_token else "❌")
-    st.write("Telegram — destino configurado:", "✅" if telegram_chat_id else "❌")
-    st.write("Telegram — publicação manual habilitada:", "✅" if telegram_enabled else "⏸️")
     st.write("Pinterest — OAuth token:", "✅" if pinterest_token else "❌")
     st.write("Pinterest — Board ID:", "✅" if pinterest_board_id else "❌")
     st.write("Pinterest — publicação manual habilitada:", "✅" if pinterest_enabled else "⏸️")
 
-    with st.expander("Configurar o novo bot Telegram nos Streamlit Secrets"):
-        st.caption(
-            "Crie o bot pelo @BotFather, guarde o token em segredo e adicione o bot como administrador "
-            "do canal/grupo autorizado, com permissão para publicar. Use @username público ou ID numérico. "
-            "Não cole tokens no chat, na planilha ou no código."
-        )
-        st.code(
-            'telegram_publisher_bot_token = "TOKEN_DO_NOVO_BOT"\n'
-            'telegram_publisher_chat_id = "@SEU_CANAL_OU_ID_NUMERICO"\n'
-            'telegram_publish_enabled = false',
-            language="toml",
-        )
-        st.info(
-            "O app lê somente os Secrets novos acima; não reutiliza `TELEGRAM_BOT_TOKEN` nem "
-            "`TELEGRAM_CHAT_ID` antigos. Mantenha `telegram_publish_enabled=false` até revisar o destino. "
-            "Um bot novo não contorna restrições da plataforma: use apenas um canal/grupo que você administra "
-            "ou uma audiência que optou por receber as ofertas; o sistema não dispara DMs em massa."
-        )
-
     with st.expander("Configurar Pinterest nos Streamlit Secrets"):
-        st.caption(
-            "Cada Pin será linkado à URL original de afiliado. A publicação cria conteúdo público real; "
-            "não existe modo de teste neste botão."
-        )
+        st.caption("Adicione as credenciais em Manage app → Settings → Secrets. Não cole tokens no chat, na planilha nem no código.")
         st.code(
             'pinterest_access_token = "TOKEN_OAUTH_DO_PINTEREST"\n'
             'pinterest_board_id = "ID_NUMERICO_DO_BOARD"\n'
@@ -591,28 +561,19 @@ with channels_tab:
 
     if not github_token:
         st.warning("Publicação bloqueada: configure github_token para salvar o estado no CSV do GitHub.")
-    if not telegram_enabled and not pinterest_enabled:
-        st.warning("Nenhum canal está habilitado para publicação manual. Os dois opt-ins permanecem desativados por padrão.")
-    if telegram_enabled and (not telegram_token or not telegram_chat_id):
-        st.warning(
-            "Telegram foi habilitado, mas faltam telegram_publisher_bot_token e/ou "
-            "telegram_publisher_chat_id nos Secrets."
-        )
+    if not pinterest_enabled:
+        st.info("A publicação manual do Pinterest está desativada por padrão. Habilite-a somente quando estiver pronto para criar Pins reais.")
     if pinterest_enabled and (not pinterest_token or not pinterest_board_id):
         st.warning("Pinterest foi habilitado, mas faltam pinterest_access_token e/ou pinterest_board_id nos Secrets.")
 
-    requested_channels = enabled_channels({
-        "TELEGRAM_PUBLISH_ENABLED": telegram_enabled,
-        "PINTEREST_PUBLISH_ENABLED": pinterest_enabled,
-    })
-    destination_names = [name.title() for name in requested_channels]
+    requested_channels = enabled_channels({"PINTEREST_PUBLISH_ENABLED": pinterest_enabled})
     if len(df):
         product_labels = {
             f"{int(row['id'])} — {row['nome']}": index
             for index, row in df.iterrows()
         }
         selected_label = st.selectbox(
-            "Produto para publicação",
+            "Produto para publicação no Pinterest",
             list(product_labels),
             key="channel_product_select",
         )
@@ -627,22 +588,13 @@ with channels_tab:
         cooldown_active = cooldown_until is not None and now < cooldown_until
 
         preflight_errors = []
-        if "telegram" in requested_channels and telegram_token and telegram_chat_id and product_is_approved:
-            try:
-                build_telegram_payload(selected_row, str(telegram_chat_id))
-            except TelegramPublisherError as exc:
-                preflight_errors.append("Telegram: " + str(exc))
-        if "pinterest" in requested_channels and pinterest_token and pinterest_board_id and product_is_approved:
+        if requested_channels and pinterest_token and pinterest_board_id and product_is_approved:
             try:
                 build_pin_payload(selected_row, str(pinterest_board_id))
             except PinterestPublisherError as exc:
                 preflight_errors.append("Pinterest: " + str(exc))
 
-        channel_credentials_ready = bool(requested_channels) and all(
-            (telegram_token and telegram_chat_id) if channel == "telegram"
-            else (pinterest_token and pinterest_board_id)
-            for channel in requested_channels
-        )
+        channel_credentials_ready = bool(requested_channels and pinterest_token and pinterest_board_id)
         can_publish = bool(
             github_token
             and channel_credentials_ready
@@ -653,41 +605,22 @@ with channels_tab:
         )
 
         if not product_is_approved:
-            st.warning(
-                "Publicação bloqueada: ative e aprove este produto somente depois de revisar nome, preço, imagem e link."
-            )
+            st.warning("Publicação bloqueada: ative e aprove este produto somente depois de revisar nome, preço, imagem e link.")
         elif requested_channels and not product_is_due:
-            st.warning(
-                "Este produto ainda não está elegível. Confira aprovação, estado de cada canal e frequência na tabela."
-            )
+            st.warning("Este produto ainda não está elegível. Confira aprovação, estado Pinterest e frequência na tabela.")
         if cooldown_active:
             st.info(f"Intervalo global mínimo de quatro horas ativo até {cooldown_until.isoformat()}.")
         for error in preflight_errors:
-            st.warning("Pré-validação bloqueou a publicação antes de qualquer envio. " + error)
+            st.warning("Pré-validação bloqueou a publicação antes do envio. " + error)
 
         if can_publish:
-            st.caption(
-                f"Destino desta ação: {' + '.join(destination_names)}. A publicação é sequencial, "
-                "usa a URL original de afiliado e registra o resultado de cada canal."
-            )
-
-        if len(requested_channels) == 2:
-            button_label = "🚀 Publicar no Telegram + Pinterest (sequencial)"
-        elif requested_channels == ["telegram"]:
-            button_label = "🚀 Publicar somente no Telegram"
-        elif requested_channels == ["pinterest"]:
-            button_label = "🚀 Publicar somente no Pinterest"
-        else:
-            button_label = "🚀 Publicar (habilite um canal)"
-
+            st.caption("Destino: Pinterest. A ação cria um Pin público com a URL original de afiliado e registra o recibo no CSV.")
+        button_label = "🚀 Criar Pin linkado no Pinterest" if requested_channels else "🔒 Habilite a publicação do Pinterest"
         if st.button(button_label, type="primary", disabled=not can_publish):
             publish_env = {
                 "PUBLISH_CONFIRMED": "true",
                 "GH_AUTOMATION_TOKEN": str(github_token),
                 "GITHUB_TOKEN": str(github_token),
-                "TELEGRAM_PUBLISH_ENABLED": str(telegram_enabled).lower(),
-                "TELEGRAM_PUBLISHER_BOT_TOKEN": str(telegram_token or ""),
-                "TELEGRAM_PUBLISHER_CHAT_ID": str(telegram_chat_id or ""),
                 "PINTEREST_PUBLISH_ENABLED": str(pinterest_enabled).lower(),
                 "PINTEREST_ACCESS_TOKEN": str(pinterest_token or ""),
                 "PINTEREST_BOARD_ID": str(pinterest_board_id or ""),
@@ -698,14 +631,12 @@ with channels_tab:
                     session=requests,
                     product_id=selected_row["id"],
                 )
-                st.success(
-                    "Publicação concluída nos canais habilitados e estados registrados na base do GitHub."
-                )
+                st.success("Pin criado no Pinterest e estado registrado na base do GitHub.")
                 st.rerun()
             except Exception as exc:
                 st.error(
                     "Publicação bloqueada ou falhou: "
-                    + redact_secrets(exc, github_token, telegram_token, pinterest_token)
+                    + redact_secrets(exc, github_token, pinterest_token)
                 )
     else:
         st.info("Cadastre produtos primeiro.")

@@ -43,19 +43,15 @@ def build_attention_items(frame: pd.DataFrame, limit: int | None = 6) -> pd.Data
     for _, row in frame.iterrows():
         reasons: list[str] = []
         status = _text(row.get("status_publicacao")).casefold()
-        telegram_status = _text(row.get("telegram_status")).casefold()
         pinterest_status = _text(row.get("pinterest_status")).casefold()
         review_needed = (
             status in {"revisar", "enviando"}
-            or telegram_status == "revisar"
             or pinterest_status == "revisar"
         )
         if status == "revisar":
             reasons.append("Publicação em revisão")
         if status == "enviando":
             reasons.append("Publicação em andamento — confira o resultado")
-        if telegram_status == "revisar":
-            reasons.append("Telegram precisa de revisão")
         if pinterest_status == "revisar":
             reasons.append("Pinterest precisa de revisão")
 
@@ -108,7 +104,6 @@ def build_dashboard_kpis(frame: pd.DataFrame) -> dict[str, int | float]:
             "attention": 0,
             "clicks": 0,
             "orders": 0,
-            "telegram_posts": 0,
             "pinterest_pins": 0,
             "commission": 0.0,
         }
@@ -117,10 +112,6 @@ def build_dashboard_kpis(frame: pd.DataFrame) -> dict[str, int | float]:
         parse_bool(row.get("ativo", False), default=False)
         and parse_bool(row.get("aprovado_publicacao", False), default=False)
         for _, row in frame.iterrows()
-    )
-    telegram_posts = sum(
-        _text(value).casefold() == "enviado"
-        for value in frame.get("telegram_status", pd.Series(index=frame.index, dtype=object))
     )
     pinterest_pins = sum(
         _text(value).casefold() == "enviado"
@@ -132,7 +123,6 @@ def build_dashboard_kpis(frame: pd.DataFrame) -> dict[str, int | float]:
         "attention": int(len(build_attention_items(frame, limit=None))),
         "clicks": int(round(_sum_column(frame, "cliques"))),
         "orders": int(round(_sum_column(frame, "pedidos"))),
-        "telegram_posts": int(telegram_posts),
         "pinterest_pins": int(pinterest_pins),
         "commission": round(_sum_column(frame, "comissao_estimada"), 2),
     }

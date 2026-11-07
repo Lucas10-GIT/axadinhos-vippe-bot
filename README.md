@@ -1,69 +1,57 @@
 # Axadinhos Vippe Bot
 
-Aplicativo Streamlit para importar e revisar ofertas da Shopee e publicá-las, quando autorizadas, no Telegram e/ou Pinterest. A base oficial fica em `data/products.csv` no GitHub. Os dois canais são opcionais e possuem opt-ins independentes; nenhum token, por si só, libera publicações.
+Aplicativo Streamlit para importar e revisar ofertas da Shopee, preparar textos para copiar manualmente em WhatsApp, Instagram e TikTok, e criar Pins linkados no Pinterest quando explicitamente autorizado. A base fica em `data/products.csv` no GitHub. As três redes de preparação manual não têm API, envio automático, cron ou armazenamento de contatos conectado neste app.
 
-## Importar links Shopee em lote
+## Importar links da Shopee
 
-Na aba **Produtos**, cole até 20 links HTTPS da Shopee por lote, separados por linha, espaço ou vírgula. O importador tenta obter nome, preço, foto e categoria pela API de afiliados quando as credenciais autorizadas estão disponíveis; caso contrário, usa leitura best-effort de metadados públicos, HTML e JSON embutido. A Shopee pode omitir os dados ou bloquear a leitura, então revise e complete os campos manualmente.
+Na aba **Produtos**, cole até 20 links HTTPS da Shopee por lote. O importador tenta obter nome, preço, foto e categoria pela API de afiliados quando há credenciais autorizadas; sem elas, usa leitura best-effort de metadados públicos, HTML e JSON embutido. A Shopee pode omitir os dados ou bloquear a leitura, então revise e complete os campos manualmente.
 
-O link original é preservado para manter o rastreamento de afiliado. Links fora dos domínios HTTPS aceitos e duplicatas são ignorados. A importação adiciona os produtos à sessão do Streamlit; **Salvar produtos** grava a tabela no GitHub. Todo item novo começa **inativo**, **sem aprovação** e com os dois destinos em estado `pendente`. Revise nome, preço, imagem e destino antes de ativá-lo e aprová-lo.
+O link de afiliado submetido é preservado. Links fora dos domínios HTTPS aceitos e duplicatas são ignorados. A importação adiciona itens à sessão do Streamlit; **Salvar produtos** grava a tabela no GitHub. Todo produto novo começa **inativo**, **sem aprovação** e com Pinterest em estado `pendente`. Revise nome, preço, imagem e destino antes de ativá-lo e aprová-lo.
 
 O acesso à Shopee Affiliate Open API depende de concessão da própria Shopee. Sem acesso, a importação tradicional continua disponível e não tenta contornar a autorização.
 
-## Texto de oferta personalizável
+## Preparar conteúdo para copiar
 
-Na aba **Produtos**, o campo opcional **Chamada personalizada** aceita uma frase curta de até 180 caracteres por produto. A aba **Anúncios** mostra o texto pronto para copiar, incluindo essa chamada, nome, preço, URL de afiliado original e aviso sobre comissão e variação de preço/disponibilidade. Telegram e Pinterest acrescentam o aviso automaticamente; o Pin continua apontando para o link original. Uma chamada acima do limite ou uma descrição Pinterest longa demais bloqueia o envio, em vez de truncar o texto obrigatório. O campo não usa IA nem exige nova chave.
+Na aba **Produtos**, o campo opcional **Chamada personalizada** aceita uma frase curta de até 180 caracteres. A aba **Anúncios** monta rascunhos de WhatsApp, legenda de Instagram e texto para TikTok com preço e aviso de afiliado. Os blocos são copiáveis; o sistema não envia mensagens nem publica nesses canais.
 
-## Publicação Telegram e Pinterest
+No WhatsApp, o texto inclui o link original. Compartilhe somente com pessoas que aceitaram receber ofertas e respeite pedidos para parar. O app não importa listas de contatos nem automatiza envios.
 
-A aba **Canais** informa se os Secrets estão presentes e se a publicação manual foi habilitada. Cada canal é independente:
+Na legenda do Instagram, o link é mantido como texto, mas não é um link clicável no feed. Para um destino clicável, atualize o link do perfil manualmente antes de usar uma chamada para a bio.
 
-- **Telegram:** usa a API oficial de bots para publicar em um canal ou grupo configurado, com link de afiliado original e aviso de afiliado. Não envia DMs em massa.
-- **Pinterest:** cria um Pin de imagem pela API oficial v5, usando a URL original de afiliado no campo de destino e incluindo aviso de afiliado. Exige board ID, imagem pública HTTPS e dados revisados.
+Para TikTok, a URL afiliada é mostrada em um campo separado e não é inserida no texto do vídeo/legenda. Use-a somente em uma superfície de link permitida. Antes de publicar, ative no próprio TikTok a divulgação de conteúdo comercial aplicável à oferta. O app não carrega nem publica fotos ou vídeos no TikTok.
 
-Crie um bot novo pelo @BotFather se desejar usar Telegram; mantenha o token privado e dê ao bot apenas as permissões necessárias no canal/grupo que você administra ou está autorizado a usar. A integração não lê os Secrets antigos `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`; ela usa somente `TELEGRAM_PUBLISHER_BOT_TOKEN` e `TELEGRAM_PUBLISHER_CHAT_ID`. Um bot diferente não contorna restrições da plataforma.
+Todos os rascunhos incluem disclosure de afiliado quando o formato permite. Preço, estoque e disponibilidade podem mudar na Shopee; confira esses dados antes de publicar.
 
-O botão do Streamlit publica apenas nos canais com opt-in manual habilitado. Se os dois estiverem ativos, o envio é **sequencial**, não simultâneo nem atômico. Antes do primeiro post, os destinos selecionados passam por pré-validação. A reserva do produto e o recibo de cada canal são gravados no CSV. Se um canal publicar e o outro falhar, o sucesso é preservado e a falha fica para revisão; não há retry automático de resultado ambíguo.
+## Publicação no Pinterest
 
-Todo produto precisa estar ativo e aprovado manualmente. O publicador processa no máximo uma oferta elegível por execução, aplica cooldown global mínimo de quatro horas e respeita a frequência por produto: 2 dias para produtos com pelo menos 2 pedidos, 4 dias para produtos com 10 ou mais cliques e 3 dias nos demais casos. Quando mais de um item estiver elegível, o maior score, baseado em pedidos, comissão estimada e conversão de cliques, tem prioridade.
+A aba **Canais** pode criar um Pin público pela API oficial v5. O Pin leva a URL original de afiliado no campo de destino e contém a chamada, o aviso de afiliado e a ressalva de preço/disponibilidade. Exige produto ativo e aprovado manualmente, nome, preço, imagem pública HTTPS, board ID numérico, credenciais válidas e opt-in manual ativo.
 
-Não foi adicionada conexão nem espelhamento de WhatsApp. Os termos da Ofertiva avisam que a existência de integração não comprova que ela seja oficial; a política da Meta exige consentimento antes de mensagens comerciais e respeito a opt-outs. Uma integração futura precisa de runtime oficial, opt-in verificável e fluxo de cancelamento, não de automação por sessão/dispositivo. Consulte a [Política de Mensagens Comerciais do WhatsApp](https://business.whatsapp.com/policy) e a documentação oficial de [opt-in](https://developers.facebook.com/documentation/business-messaging/whatsapp/getting-opt-in).
+O workflow do GitHub Actions pode publicar somente no Pinterest. O cron de quatro horas é bloqueado por padrão e requer tanto a trava geral quanto o opt-in específico do Pinterest. Nenhum conteúdo real é publicado pelo CI de testes.
 
-O **Painel** reúne produtos no catálogo, ativos aprovados, pendências, comissão estimada, cliques, pedidos e publicações registradas por canal. A lista **Atenção agora** destaca envios em andamento ou revisão, falta de aprovação/ativação, dados incompletos e fotos ausentes para Pins, sem alterar os produtos. O ranking usa a mesma pontuação do publicador; o gráfico por categoria só aparece quando há cliques ou pedidos registrados. A **Fila manual estimada** continua somente leitura e mostra a prioridade e o estado dos canais selecionados; o envio ainda exige aprovação, opt-in, credenciais válidas e cooldown liberado. O cron do GitHub usa variáveis separadas e não é representado por essa prévia.
+O publicador reserva o produto no CSV antes do envio, registra o ID do Pin e não repete automaticamente um resultado ambíguo. Registros históricos `enviado` sem recibo de Pin são colocados em revisão para impedir duplicação até a confirmação humana.
 
-## Agendamento no GitHub Actions
+## Painel
 
-O workflow `.github/workflows/publish-offers.yml` verifica ofertas a cada quatro horas (`0 */4 * * *`, UTC), mas fica bloqueado até que haja opt-in explícito. São necessárias:
-
-- `AXADINHOS_AUTO_PUBLISH=true` — trava geral;
-- `AXADINHOS_TELEGRAM_AUTO_PUBLISH=true` — opt-in agendado específico do Telegram;
-- `AXADINHOS_PINTEREST_AUTO_PUBLISH=true` — opt-in agendado específico do Pinterest.
-
-A trava geral precisa estar ativa junto de pelo menos um opt-in de canal. O agendamento processa no máximo uma oferta por execução. Antes de ativá-lo, confira todos os produtos marcados **Ativo** e **Aprovado para publicação**, pois uma oferta elegível pode ser publicada automaticamente.
-
-A execução manual pelo GitHub Actions exige marcar `confirm_publish` e selecionar explicitamente `publish_telegram`, `publish_pinterest` ou ambos. O workflow usa o `GITHUB_TOKEN` temporário do próprio run, com permissão de gravação restrita ao job, além dos Secrets dos canais selecionados.
+O **Painel** reúne tamanho do catálogo, produtos ativos e aprovados, pendências, comissão estimada, cliques, pedidos e Pins registrados. **Atenção agora** mostra revisão, envio em andamento, falta de aprovação/ativação, dados ausentes e fotos faltantes. O ranking usa a mesma pontuação do publicador; o gráfico por categoria aparece somente quando existem cliques ou pedidos registrados. A fila estimada do Pinterest é somente leitura e separada do cron.
 
 ## Configuração
 
-Consulte o [guia de Secrets](CONFIGURAR-SECRETS.md) para configurar o Streamlit Cloud, GitHub Actions e, quando disponível, a Shopee Affiliate Open API. Os armazenamentos do Streamlit e do GitHub são separados. Os opt-ins manuais e agendados começam desativados por padrão.
+Consulte [CONFIGURAR-SECRETS.md](CONFIGURAR-SECRETS.md) para configurar Streamlit Cloud, GitHub Actions e, quando disponível, a Shopee Affiliate Open API. Streamlit e GitHub usam armazenamentos separados. A preparação de conteúdo para WhatsApp, Instagram e TikTok não exige tokens; não há integração API nesses canais.
 
-Exemplo para os Secrets do Streamlit:
+Exemplo de Secrets do Streamlit:
 
 ```toml
 github_token = "TOKEN_COM_ACESSO_AO_REPOSITORIO"
-telegram_publisher_bot_token = "TOKEN_DO_NOVO_BOT"
-telegram_publisher_chat_id = "@SEU_CANAL_OU_ID_NUMERICO"
-telegram_publish_enabled = false
 pinterest_access_token = "TOKEN_OAUTH_DO_PINTEREST"
 pinterest_board_id = "ID_NUMERICO_DO_BOARD"
 pinterest_publish_enabled = false
 ```
 
-Mantenha `telegram_publish_enabled` e `pinterest_publish_enabled` em `false` enquanto configura. Altere apenas o canal que estiver pronto para publicar conteúdo real.
+Mantenha `pinterest_publish_enabled=false` até estar pronto para publicar Pins reais. A presença de credenciais não ativa o cron.
 
 ## Testes locais
 
-Os testes usam sessões falsas e não fazem chamadas reais ao GitHub, Telegram, Pinterest ou Shopee. Cobrem importação, aprovação, preservação de links, payloads, opt-ins, cooldown, prevenção de duplicatas e falhas parciais entre canais.
+Os testes usam sessões falsas e não fazem chamadas reais ao GitHub, Pinterest ou Shopee. Também verificam os textos manuais, a preservação do link afiliado e o disclosure sem enviar conteúdo às redes.
 
 ```bash
 python -m pip install -r requirements.txt -r requirements-dev.txt

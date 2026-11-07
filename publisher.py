@@ -1,7 +1,8 @@
-"""Publicador multicanal do Axadinhos Vippe.
+"""Pinterest-only publisher for the Axadinhos Vippe offer catalog.
 
-Importar este módulo não faz chamadas de rede. Cada canal exige opt-in próprio,
-PUBLISH_CONFIRMED=true, produto aprovado e credenciais recebidas pelo ambiente.
+Importing this module does not make network calls. Publishing requires an
+explicit Pinterest opt-in, PUBLISH_CONFIRMED=true, an approved product, and
+credentials passed through the execution environment.
 """
 from __future__ import annotations
 
@@ -17,11 +18,6 @@ import pandas as pd
 import requests
 
 from pinterest_publisher import PinterestPublisherError, build_pin_payload, send_pinterest_pin
-from telegram_publisher import (
-    TelegramPublisherError,
-    build_telegram_payload,
-    send_telegram_message,
-)
 
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
@@ -29,7 +25,7 @@ BRANCH = "main"
 PATH = "data/products.csv"
 DEFAULT_FREQUENCY_DAYS = 3
 READY_STATUSES = {"", "pronto", "ready"}
-CHANNELS = ("telegram", "pinterest")
+CHANNELS = ("pinterest",)
 
 
 def headers(token: str) -> dict[str, str]:
@@ -80,7 +76,7 @@ def parse_utc(value: Any) -> datetime | None:
 
 
 def publication_cooldown_until(df: pd.DataFrame, hours: int = 4) -> datetime | None:
-    """Return the earliest next global publication time, if one is recorded."""
+    """Return the earliest next global publication time, if recorded."""
     if "ultima_publicacao" not in df.columns:
         return None
     published = [
@@ -105,6 +101,7 @@ def _valid_https_url(value: Any) -> bool:
         return False
     try:
         parsed = urlsplit(text)
+        _ = parsed.port
         return (
             parsed.scheme.casefold() == "https"
             and bool(parsed.hostname)
@@ -137,29 +134,19 @@ def is_publishable(row: Any) -> bool:
 
 
 def enabled_channels(environ: Any) -> list[str]:
-    """Return only destinations explicitly opted in for this execution."""
+    """Return only Pinterest when its explicit opt-in is enabled."""
     return [
-        channel for channel, variable in (
-            ("telegram", "TELEGRAM_PUBLISH_ENABLED"),
-            ("pinterest", "PINTEREST_PUBLISH_ENABLED"),
-        )
-        if parse_bool(environ.get(variable, False), default=False)
-    ]
+        "pinterest"
+    ] if parse_bool(environ.get("PINTEREST_PUBLISH_ENABLED", False), default=False) else []
 
 
 def _normalise_channels(channels: Iterable[str] | None) -> tuple[str, ...]:
     requested = CHANNELS if channels is None else tuple(channels)
-    normalized = tuple(channel for channel in CHANNELS if channel in requested)
-    return normalized
+    return tuple(channel for channel in CHANNELS if channel in requested)
 
 
 def _channel_state(row: Any, channel: str) -> str:
     return _display(row.get(f"{channel}_status"), "pendente").casefold()
-
-
-def _channel_has_receipt(row: Any, channel: str) -> bool:
-    id_column = "telegram_message_id" if channel == "telegram" else "pinterest_pin_id"
-    return bool(_display(row.get(id_column)))
 
 
 def is_due(
@@ -167,12 +154,7 @@ def is_due(
     now: datetime | None = None,
     channels: Iterable[str] | None = None,
 ) -> bool:
-    """Check approval, channel state and frequency for the opted-in destinations.
-
-    A product already sent to one channel may complete a pending cross-post
-    without waiting its full repost frequency. The global four-hour cooldown
-    is still enforced by ``main``.
-    """
+    """Check approval, Pinterest state, and per-product frequency."""
     if not parse_bool(row.get("ativo", True)):
         return False
     if not parse_bool(row.get("aprovado_publicacao", False), default=False):
@@ -186,27 +168,24 @@ def is_due(
     states = [_channel_state(row, channel) for channel in targets]
     if any(state not in {"pendente", "enviado"} for state in states):
         return False
-    has_pending = any(state == "pendente" for state in states)
-    if not has_pending:
+    if not any(state == "pendente" for state in states):
         return False
 
     status = _display(row.get("status_publicacao"), "pronto").casefold()
-    completing_crosspost = status == "enviado"
-    if status not in READY_STATUSES and not completing_crosspost:
+    if status == "enviado":
+        # A completed record cannot be sent again; the channel receipt is the
+        # authoritative idempotency guard for this single-channel publisher.
+        return False
+    if status not in READY_STATUSES:
         return False
 
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
-
-    if completing_crosspost:
-        return True
-
     next_publication = parse_utc(row.get("proxima_publicacao", ""))
     if next_publication is not None:
         return current >= next_publication
-
     frequency = int(_number(row.get("frequencia_dias", DEFAULT_FREQUENCY_DAYS), DEFAULT_FREQUENCY_DAYS))
     frequency = min(30, max(1, frequency))
     last_published = parse_utc(row.get("ultima_publicacao", ""))
@@ -222,28 +201,27 @@ def score(row: Any) -> float:
     return orders * 5 + commission + (orders / max(clicks, 1)) * 100
 
 
-def select_candidate(
-    df: pd.DataFrame,
-    now: datetime | None = None,
-    channels: Iterable[str] | None = None,
-):
-    """Return the due (index, row) with the highest score, or None."""
-    candidates = rank_candidates(df, now, channels)
-    return candidates[0] if candidates else None
-
-
 def rank_candidates(
     df: pd.DataFrame,
     now: datetime | None = None,
     channels: Iterable[str] | None = None,
 ) -> list[tuple[Any, Any]]:
-    """Return all due products in the exact priority order used for publication."""
+    """Return eligible products in the same priority order used by publishing."""
     candidates = [
         (index, row)
         for index, row in df.iterrows()
         if is_due(row, now, channels)
     ]
     return sorted(candidates, key=lambda item: score(item[1]), reverse=True)
+
+
+def select_candidate(
+    df: pd.DataFrame,
+    now: datetime | None = None,
+    channels: Iterable[str] | None = None,
+):
+    candidates = rank_candidates(df, now, channels)
+    return candidates[0] if candidates else None
 
 
 def publication_frequency(row: Any) -> int:
@@ -299,8 +277,6 @@ def _ensure_state_columns(df: pd.DataFrame) -> pd.DataFrame:
         "ultima_publicacao": "",
         "proxima_publicacao": "",
         "ultima_tentativa": "",
-        "telegram_message_id": "",
-        "telegram_status": "pendente",
         "pinterest_status": "pendente",
         "pinterest_pin_id": "",
     }
@@ -309,19 +285,12 @@ def _ensure_state_columns(df: pd.DataFrame) -> pd.DataFrame:
             df[column] = default
         df[column] = df[column].astype("object")
         df[column] = df[column].where(df[column].notna(), default)
-    for channel in CHANNELS:
-        df[f"{channel}_status"] = df[f"{channel}_status"].astype(str).str.strip().str.casefold()
-        id_column = "telegram_message_id" if channel == "telegram" else "pinterest_pin_id"
-        for row_index, stored_row in df.iterrows():
-            if _display(stored_row.get(id_column)):
-                df.at[row_index, f"{channel}_status"] = "enviado"
-    # A previous combined status without a channel receipt is ambiguous after
-    # migration; require a human check instead of risking a duplicate post.
+    df["pinterest_status"] = df["pinterest_status"].astype(str).str.strip().str.casefold()
     for row_index, stored_row in df.iterrows():
+        if _display(stored_row.get("pinterest_pin_id")):
+            df.at[row_index, "pinterest_status"] = "enviado"
         status = _display(stored_row.get("status_publicacao"), "pronto").casefold()
-        if status == "enviado" and not any(
-            _channel_has_receipt(stored_row, channel) for channel in CHANNELS
-        ):
+        if status == "enviado" and not _display(stored_row.get("pinterest_pin_id")):
             df.at[row_index, "status_publicacao"] = "revisar"
     return df
 
@@ -329,13 +298,11 @@ def _ensure_state_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _persist_review(
     df: pd.DataFrame,
     index: Any,
-    channel: str | None,
     token: str,
     sha: str,
     session: Any,
 ) -> str:
-    if channel:
-        df.at[index, f"{channel}_status"] = "revisar"
+    df.at[index, "pinterest_status"] = "revisar"
     df.at[index, "status_publicacao"] = "revisar"
     return save(token, df, sha, session)
 
@@ -352,32 +319,23 @@ def main(
 
     channels = enabled_channels(env)
     if not channels:
-        raise RuntimeError("Publicação bloqueada: habilite explicitamente pelo menos um canal.")
+        raise RuntimeError("Publicação bloqueada: habilite explicitamente Pinterest.")
 
     github_token = env.get("GH_AUTOMATION_TOKEN") or env.get("GITHUB_TOKEN")
-    telegram_token = env.get("TELEGRAM_PUBLISHER_BOT_TOKEN") if "telegram" in channels else ""
-    telegram_chat_id = env.get("TELEGRAM_PUBLISHER_CHAT_ID") if "telegram" in channels else ""
-    pinterest_token = env.get("PINTEREST_ACCESS_TOKEN") if "pinterest" in channels else ""
-    pinterest_board_id = env.get("PINTEREST_BOARD_ID") if "pinterest" in channels else ""
-
-    required = [("GH_AUTOMATION_TOKEN ou GITHUB_TOKEN", github_token)]
-    if "telegram" in channels:
-        required.extend([
-            ("TELEGRAM_PUBLISHER_BOT_TOKEN", telegram_token),
-            ("TELEGRAM_PUBLISHER_CHAT_ID", telegram_chat_id),
-        ])
-    if "pinterest" in channels:
-        required.extend([
+    pinterest_token = env.get("PINTEREST_ACCESS_TOKEN")
+    pinterest_board_id = env.get("PINTEREST_BOARD_ID")
+    missing = [
+        name for name, value in (
+            ("GH_AUTOMATION_TOKEN ou GITHUB_TOKEN", github_token),
             ("PINTEREST_ACCESS_TOKEN", pinterest_token),
             ("PINTEREST_BOARD_ID", pinterest_board_id),
-        ])
-    missing = [name for name, value in required if not value]
+        ) if not value
+    ]
     if missing:
         raise RuntimeError("Secrets ausentes: " + ", ".join(missing))
 
     df, sha = load(github_token, session)
     df = _ensure_state_columns(df)
-
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
@@ -407,107 +365,77 @@ def main(
         selected_row = df.loc[selected_index]
         if not is_due(selected_row, current, channels):
             raise RuntimeError(
-                "Publicação bloqueada: o produto deve estar ativo, aprovado, pronto e elegível para os canais habilitados."
+                "Publicação bloqueada: o produto deve estar ativo, aprovado, pronto e elegível para Pinterest."
             )
         candidate = (selected_index, selected_row)
 
     if candidate is None:
-        print("Nenhum produto ativo, aprovado, válido e elegível para os canais habilitados.")
+        print("Nenhum produto ativo, aprovado, válido e elegível para Pinterest.")
         return 0
 
     index, row = candidate
-    review_channels = [channel for channel in channels if _channel_state(row, channel) == "revisar"]
-    if review_channels:
+    if _channel_state(row, "pinterest") == "revisar":
         df.at[index, "status_publicacao"] = "revisar"
         save(github_token, df, sha, session)
-        raise RuntimeError(
-            "Canal(is) aguardando revisão manual antes de novo envio: " + ", ".join(review_channels)
-        )
+        raise RuntimeError("Pinterest aguarda revisão manual antes de novo envio.")
 
-    valid_states = {"pendente", "enviado"}
-    unknown_channels = [channel for channel in channels if _channel_state(row, channel) not in valid_states]
-    if unknown_channels:
-        for channel in unknown_channels:
-            df.at[index, f"{channel}_status"] = "revisar"
-        df.at[index, "status_publicacao"] = "revisar"
-        try:
-            save(github_token, df, sha, session)
-        except Exception as exc:
-            raise RuntimeError(
-                "Estado de canal desconhecido e falha ao registrar revisão: "
-                + _redact(exc, github_token, telegram_token, pinterest_token)
-            ) from None
-        raise RuntimeError("Estado de canal desconhecido; revise antes de publicar: " + ", ".join(unknown_channels))
-
-    pending_channels = [channel for channel in channels if _channel_state(row, channel) == "pendente"]
-    if not pending_channels:
-        print("Os canais habilitados já registram envio; nenhuma republicação foi feita.")
+    state = _channel_state(row, "pinterest")
+    if state not in {"pendente", "enviado"}:
+        _persist_review(df, index, github_token, sha, session)
+        raise RuntimeError("Estado Pinterest desconhecido; revise antes de publicar.")
+    if state == "enviado":
+        print("O produto já tem recibo de Pin; nenhuma republicação foi feita.")
         return 0
 
-    # Validate every pending destination before the first public post.
     try:
-        for channel in pending_channels:
-            if channel == "telegram":
-                build_telegram_payload(row, telegram_chat_id)
-            else:
-                build_pin_payload(row, pinterest_board_id)
-    except (TelegramPublisherError, PinterestPublisherError) as exc:
+        build_pin_payload(row, pinterest_board_id)
+    except PinterestPublisherError as exc:
         try:
-            _persist_review(df, index, channel, github_token, sha, session)
+            _persist_review(df, index, github_token, sha, session)
         except Exception as save_exc:
             raise RuntimeError(
-                "Validação do destino falhou antes de qualquer post; não foi possível registrar a revisão. "
-                + _redact(save_exc, github_token, telegram_token, pinterest_token)
+                "Pré-validação falhou e não foi possível registrar a revisão. "
+                + _redact(save_exc, github_token, pinterest_token)
             ) from None
-        raise RuntimeError(
-            f"Pré-validação de {channel.title()} falhou; nenhum canal foi publicado. " + str(exc)
-        ) from None
+        raise RuntimeError("Pré-validação do Pinterest falhou; nenhum Pin foi criado. " + str(exc)) from None
 
     # Reserve the product in GitHub before making any external request.
     df.at[index, "status_publicacao"] = "enviando"
     df.at[index, "ultima_tentativa"] = current.isoformat()
     checkpoint_sha = save(github_token, df, sha, session)
 
-    current_channel = ""
     try:
-        for channel in pending_channels:
-            current_channel = channel
-            if channel == "telegram":
-                result = send_telegram_message(row, telegram_token, telegram_chat_id, session)
-                df.at[index, "telegram_message_id"] = str(result["message_id"])
-            else:
-                result = send_pinterest_pin(row, pinterest_token, pinterest_board_id, session)
-                df.at[index, "pinterest_pin_id"] = str(result["id"])
-            df.at[index, f"{channel}_status"] = "enviado"
-            df.at[index, "ultima_publicacao"] = current.isoformat()
-            # Persist each destination result before moving to the next one.
-            checkpoint_sha = save(github_token, df, checkpoint_sha, session)
+        result = send_pinterest_pin(row, pinterest_token, pinterest_board_id, session)
+        df.at[index, "pinterest_pin_id"] = str(result["id"])
+        df.at[index, "pinterest_status"] = "enviado"
+        df.at[index, "ultima_publicacao"] = current.isoformat()
+        checkpoint_sha = save(github_token, df, checkpoint_sha, session)
 
         frequency = publication_frequency(row)
         df.at[index, "status_publicacao"] = "enviado"
         df.at[index, "frequencia_dias"] = frequency
         df.at[index, "proxima_publicacao"] = (current + timedelta(days=frequency)).isoformat()
-        checkpoint_sha = save(github_token, df, checkpoint_sha, session)
+        save(github_token, df, checkpoint_sha, session)
     except Exception as exc:
-        if current_channel and _channel_state(df.loc[index], current_channel) != "enviado":
-            df.at[index, f"{current_channel}_status"] = "revisar"
+        if _channel_state(df.loc[index], "pinterest") != "enviado":
+            df.at[index, "pinterest_status"] = "revisar"
         df.at[index, "status_publicacao"] = "revisar"
         try:
             save(github_token, df, checkpoint_sha, session)
         except Exception as save_exc:
             raise RuntimeError(
                 "Falha no envio e no registro do estado; o produto permanece bloqueado para revisão. "
-                + _redact(save_exc, github_token, telegram_token, pinterest_token)
+                + _redact(save_exc, github_token, pinterest_token)
             ) from None
         raise RuntimeError(
-            f"{current_channel.title() or 'Canal'} não confirmou o envio; produto marcado para revisão manual. "
-            + _redact(exc, github_token, telegram_token, pinterest_token)
+            "Pinterest não confirmou o envio; produto marcado para revisão manual. "
+            + _redact(exc, github_token, pinterest_token)
         ) from None
 
-    channel_names = " + ".join(channel.title() for channel in channels)
+    frequency = publication_frequency(row)
     print(
-        f"Publicado: {_display(row.get('nome'), 'produto sem nome')} | "
-        f"canais: {channel_names} | próxima em {frequency} dias"
+        f"Publicado no Pinterest: {_display(row.get('nome'), 'produto sem nome')} | "
+        f"próxima publicação após {frequency} dias"
     )
     return 0
 
@@ -522,7 +450,6 @@ if __name__ == "__main__":
                 exc,
                 os.environ.get("GH_AUTOMATION_TOKEN"),
                 os.environ.get("GITHUB_TOKEN"),
-                os.environ.get("TELEGRAM_PUBLISHER_BOT_TOKEN"),
                 os.environ.get("PINTEREST_ACCESS_TOKEN"),
             )
         )
