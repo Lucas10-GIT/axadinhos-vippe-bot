@@ -1,5 +1,6 @@
 import pytest
 
+from pinterest_publisher import build_pin_payload
 from social_copy import MAX_SOCIAL_TITLE_CHARS, SocialCopyError, build_manual_copies
 
 
@@ -16,6 +17,7 @@ def test_channel_drafts_have_distinct_ctas_and_keep_the_affiliate_url():
     copies = build_manual_copies(ROW)
 
     assert ROW["link"] in copies["whatsapp"]
+    assert copies["pinterest_link"] == ROW["link"]
     assert ROW["link"] not in copies["instagram"]
     assert ROW["link"] not in copies["tiktok"]
     assert copies["instagram_bio_link"] == ROW["link"]
@@ -29,9 +31,23 @@ def test_channel_drafts_have_distinct_ctas_and_keep_the_affiliate_url():
     assert "#Ofertas" in copies["tiktok"]
     for key in ("whatsapp", "instagram", "tiktok"):
         assert "Aviso de afiliado" in copies[key]
-        assert "sem custo extra" in copies[key]
         assert "Preço e disponibilidade podem mudar" in copies[key]
+    assert "Link de afiliado" in copies["pinterest_description"]
+    assert "Preço e disponibilidade podem mudar" in copies["pinterest_description"]
+    assert "sem custo adicional" in copies["pinterest_description"]
+    for key in ("whatsapp", "instagram", "tiktok"):
+        assert "sem custo extra" in copies[key]
         assert ROW["chamada"] in copies[key]
+
+
+def test_pinterest_manual_copy_matches_the_actual_api_payload():
+    row = {**ROW, "imagem_url": "https://images.example.com/product.jpg"}
+    copies = build_manual_copies(row)
+    payload = build_pin_payload(row, "123456789")
+
+    assert copies["pinterest_title"] == payload["title"]
+    assert copies["pinterest_description"] == payload["description"]
+    assert copies["pinterest_link"] == payload["link"] == ROW["link"]
 
 
 def test_long_product_title_is_compacted_without_changing_catalog_link_or_price():

@@ -508,7 +508,8 @@ with ads:
             and parse_bool(selected_row.get("aprovado_publicacao", False), default=False)
         )
         st.caption(
-            "Escolha um formato e copie o texto. Se habilitado, o botão WhatsApp encaminha um rascunho ao seu endpoint; "
+            "Escolha um formato e copie a composição. A prévia Pinterest coincide com o título e a descrição do Pin; "
+            "se habilitado, o botão WhatsApp encaminha um rascunho ao seu endpoint; "
             "não envia mensagens nem publica conteúdo. "
             "A chamada personalizada, o preço e o link cadastrado são mantidos quando aplicável."
         )
@@ -522,11 +523,28 @@ with ads:
         except SocialCopyError as exc:
             st.warning(str(exc))
         else:
-            whatsapp_tab, instagram_tab, tiktok_tab = st.tabs([
+            pinterest_tab, whatsapp_tab, instagram_tab, tiktok_tab = st.tabs([
+                "Pinterest — Pin linkado",
                 "WhatsApp — mensagem",
                 "Instagram — legenda",
                 "TikTok — texto manual",
             ])
+            with pinterest_tab:
+                st.caption(
+                    "Prévia para o Pin: o título e a descrição abaixo são os mesmos que o publicador envia à API. "
+                    "O link fica no campo de destino do Pin, preservando a URL afiliada original."
+                )
+                st.markdown("**Título do Pin**")
+                st.code(manual_copies["pinterest_title"], language=None)
+                st.markdown("**Descrição do Pin**")
+                st.code(manual_copies["pinterest_description"], language=None)
+                st.markdown("**Link de destino (URL afiliada original)**")
+                st.code(manual_copies["pinterest_link"], language=None)
+                st.caption(
+                    "A criação pela API continua separada e exige produto ativo/aprovado, imagem pública HTTPS, "
+                    "Board ID, credenciais e publicação manual habilitada. Prefira Pins originais e evite repetir "
+                    "conteúdo afiliado ou publicar em grande volume."
+                )
             with whatsapp_tab:
                 st.caption("Mensagem curta com link original. Compartilhe apenas com quem consentiu e respeite pedidos para parar.")
                 st.code(manual_copies["whatsapp"], language=None)

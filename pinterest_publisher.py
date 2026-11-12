@@ -56,13 +56,11 @@ def _valid_shopee_link(value: Any) -> bool:
     )
 
 
-def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
-    """Build a compliant image Pin; fail closed if the source is incomplete."""
+def build_pin_copy(row: Any) -> dict[str, str]:
+    """Build the exact title and description used for an affiliate Pin."""
     name = _text(row.get("nome"))
     price = _text(row.get("preco"))
     link = _text(row.get("link"))
-    image = _text(row.get("imagem_url"))
-    board = _text(board_id)
     try:
         callout = get_custom_callout(row)
     except ValueError as exc:
@@ -72,10 +70,6 @@ def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
         raise PinterestPublisherError("Pinterest exige nome e preço revisados para esta oferta.")
     if not _valid_shopee_link(link):
         raise PinterestPublisherError("O destino precisa ser um link HTTPS válido da Shopee.")
-    if not _valid_https_url(image):
-        raise PinterestPublisherError("Pinterest exige uma imagem pública HTTPS para criar o Pin.")
-    if not board.isdigit():
-        raise PinterestPublisherError("O Pinterest Board ID deve conter apenas números.")
 
     disclosure = (
         "Link de afiliado: posso receber comissão por compras feitas por este link, sem custo adicional. "
@@ -87,10 +81,24 @@ def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
         raise PinterestPublisherError(
             "A descrição excede o limite de 800 caracteres; encurte o nome, o preço ou a chamada."
         )
+    return {"title": name[:100], "description": description}
+
+
+def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
+    """Build a compliant image Pin; fail closed if the source is incomplete."""
+    image = _text(row.get("imagem_url"))
+    board = _text(board_id)
+    copy = build_pin_copy(row)
+    link = _text(row.get("link"))
+    name = _text(row.get("nome"))
+    if not _valid_https_url(image):
+        raise PinterestPublisherError("Pinterest exige uma imagem pública HTTPS para criar o Pin.")
+    if not board.isdigit():
+        raise PinterestPublisherError("O Pinterest Board ID deve conter apenas números.")
     return {
         "board_id": board,
-        "title": name[:100],
-        "description": description,
+        "title": copy["title"],
+        "description": copy["description"],
         "alt_text": f"Imagem do produto: {name}"[:500],
         "link": link,
         "media_source": {

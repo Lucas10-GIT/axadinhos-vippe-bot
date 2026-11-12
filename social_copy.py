@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from offer_copy import get_custom_callout
+from pinterest_publisher import PinterestPublisherError, build_pin_copy
 
 AFFILIATE_DISCLOSURE = (
     "Aviso de afiliado: posso receber comissão se você comprar por um link de afiliado, "
@@ -96,6 +97,7 @@ def _hashtags(category: Any) -> str:
 def build_manual_copies(row: Any) -> dict[str, str]:
     """Build concise channel-specific drafts while preserving the submitted link.
 
+    Pinterest uses the same title and description builder as the API publisher.
     WhatsApp receives the original affiliate URL in its message. Instagram and
     TikTok captions use platform-appropriate bio/profile calls to action, while
     the same URL is returned separately for the user to place where links are
@@ -111,6 +113,11 @@ def build_manual_copies(row: Any) -> dict[str, str]:
         raise SocialCopyError(str(exc)) from None
     except Exception:
         raise SocialCopyError("Não foi possível ler os dados deste produto.") from None
+
+    try:
+        pinterest_copy = build_pin_copy(row)
+    except PinterestPublisherError as exc:
+        raise SocialCopyError(str(exc)) from None
 
     if not name or not price:
         raise SocialCopyError("Preencha nome e preço revisados antes de preparar o conteúdo.")
@@ -147,6 +154,9 @@ def build_manual_copies(row: Any) -> dict[str, str]:
         "whatsapp": whatsapp,
         "instagram": instagram,
         "tiktok": tiktok,
+        "pinterest_title": pinterest_copy["title"],
+        "pinterest_description": pinterest_copy["description"],
+        "pinterest_link": link,
         "instagram_bio_link": link,
         "tiktok_profile_link": link,
         "affiliate_link": link,
