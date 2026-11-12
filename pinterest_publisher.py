@@ -8,6 +8,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import requests
+from affiliate_links import (
+    affiliate_disclosure,
+    affiliate_destination,
+    contains_amazon_price_claim,
+    explicit_true,
+    affiliate_program,
+    is_valid_affiliate_link,
+)
 from offer_copy import get_custom_callout
 
 CREATE_PIN_URL = "https://api.pinterest.com/v5/pins"
@@ -44,38 +52,37 @@ def _valid_https_url(value: Any) -> bool:
         return False
 
 
-def _valid_shopee_link(value: Any) -> bool:
-    if not _valid_https_url(value):
-        return False
-    host = (urlsplit(_text(value)).hostname or "").casefold().rstrip(".")
-    return (
-        host in {"shopee.com.br", "shopee.com", "shope.ee", "shp.ee"}
-        or host.endswith(".shopee.com.br")
-        or host.endswith(".shopee.com")
-        or host.endswith(".shp.ee")
-    )
-
-
 def build_pin_copy(row: Any) -> dict[str, str]:
     """Build the exact title and description used for an affiliate Pin."""
     name = _text(row.get("nome"))
-    price = _text(row.get("preco"))
     link = _text(row.get("link"))
+    program = affiliate_program(link)
     try:
         callout = get_custom_callout(row)
     except ValueError as exc:
         raise PinterestPublisherError(str(exc)) from None
 
-    if not name or not price:
-        raise PinterestPublisherError("Pinterest exige nome e preço revisados para esta oferta.")
-    if not _valid_shopee_link(link):
-        raise PinterestPublisherError("O destino precisa ser um link HTTPS válido da Shopee.")
+    if not name:
+        raise PinterestPublisherError("Pinterest exige o nome revisado do produto.")
+    if not is_valid_affiliate_link(link):
+        raise PinterestPublisherError("O destino precisa ser um link afiliado Amazon/EPN válido.")
+    if program == "amazon" and contains_amazon_price_claim(f"{name} {callout}"):
+        raise PinterestPublisherError(
+            "Não inclua preço estático no título ou na chamada Amazon; consulte preço e disponibilidade na loja."
+        )
+    if program == "ebay" and not explicit_true(row.get("epn_promocao_aprovada", False)):
+        raise PinterestPublisherError(
+            "Confirme a aprovação escrita da EPN para usar conteúdo promocional próprio antes de preparar o Pin."
+        )
 
-    disclosure = (
-        "Link de afiliado: posso receber comissão por compras feitas por este link, sem custo adicional. "
-        "Preço e disponibilidade podem mudar na Shopee."
-    )
-    description_parts = [callout, f"{name}\n\nPreço: {price}", disclosure]
+    if program == "amazon":
+        price_note = "Consulte o preço e a disponibilidade atuais diretamente na Amazon."
+    elif _text(row.get("preco")):
+        price_note = f"Preço de referência: {_text(row.get('preco'))}. Confirme o valor e a disponibilidade no eBay."
+    else:
+        price_note = "Confirme o preço e a disponibilidade atuais no eBay."
+    disclosure = affiliate_disclosure(link)
+    description_parts = [callout, name, price_note, disclosure]
     description = "\n\n".join(part for part in description_parts if part)
     if len(description) > 800:
         raise PinterestPublisherError(
@@ -91,6 +98,10 @@ def build_pin_payload(row: Any, board_id: str) -> dict[str, Any]:
     copy = build_pin_copy(row)
     link = _text(row.get("link"))
     name = _text(row.get("nome"))
+    if not explicit_true(row.get("imagem_autorizada", False)):
+        raise PinterestPublisherError(
+            "Confirme que você tem direito de usar esta imagem/arte antes de criar um Pin."
+        )
     if not _valid_https_url(image):
         raise PinterestPublisherError("Pinterest exige uma imagem pública HTTPS para criar o Pin.")
     if not board.isdigit():

@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import hmac
 import io
 from datetime import datetime, timezone
 
@@ -17,7 +16,7 @@ from dashboard_metrics import (
 )
 from offer_copy import MAX_CALLOUT_CHARS
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
-from shopee_affiliate_api import ShopeeAffiliateAPIError, check_connection as test_shopee_affiliate_api_connection
+from affiliate_links import affiliate_program_label
 from publisher import (
     _redact as redact_secrets,
     enabled_channels,
@@ -43,8 +42,9 @@ BRANCH = "main"
 DATA_PATH = "data/products.csv"
 
 COLS = [
-    "id", "nome", "preco", "link", "imagem_url", "categoria", "chamada", "comissao",
-    "ativo", "aprovado_publicacao", "status_publicacao", "frequencia_dias",
+    "id", "programa", "nome", "preco", "link", "imagem_url", "categoria", "chamada", "comissao",
+    "ativo", "aprovado_publicacao", "imagem_autorizada", "epn_promocao_aprovada",
+    "epn_mensageria_aprovada", "status_publicacao", "frequencia_dias",
     "cliques", "pedidos", "comissao_estimada", "ultima_publicacao",
     "proxima_publicacao", "ultima_tentativa", "pinterest_status", "pinterest_pin_id",
 ]
@@ -62,9 +62,11 @@ def secret(name, default=""):
 def clean(df):
     df = df.copy()
     defaults = {
-        "id": "", "nome": "", "preco": "", "link": "", "imagem_url": "",
+        "id": "", "programa": "", "nome": "", "preco": "", "link": "", "imagem_url": "",
         "categoria": "", "chamada": "", "comissao": 0, "ativo": True,
-        "aprovado_publicacao": False, "status_publicacao": "pronto", "frequencia_dias": 3,
+        "aprovado_publicacao": False, "imagem_autorizada": False,
+        "epn_promocao_aprovada": False, "epn_mensageria_aprovada": False,
+        "status_publicacao": "pronto", "frequencia_dias": 3,
         "cliques": 0, "pedidos": 0, "comissao_estimada": 0,
         "ultima_publicacao": "", "proxima_publicacao": "",
         "ultima_tentativa": "", "pinterest_status": "pendente", "pinterest_pin_id": "",
@@ -72,6 +74,9 @@ def clean(df):
     for column, default in defaults.items():
         if column not in df.columns:
             df[column] = default
+    df["programa"] = df["link"].fillna("").astype(str).map(
+        lambda value: affiliate_program_label(value) if value.strip() else ""
+    )
     df = df[COLS]
     for column in ["id", "cliques", "pedidos"]:
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
@@ -93,6 +98,8 @@ def clean(df):
     df["aprovado_publicacao"] = df["aprovado_publicacao"].map(
         lambda value: parse_bool(value, default=False)
     )
+    for column in ["imagem_autorizada", "epn_promocao_aprovada", "epn_mensageria_aprovada"]:
+        df[column] = df[column].map(lambda value: parse_bool(value, default=False))
     df["status_publicacao"] = df["status_publicacao"].fillna("pronto").astype(str).str.strip().str.casefold()
     df["chamada"] = df["chamada"].fillna("").astype(str)
     df["pinterest_status"] = df["pinterest_status"].fillna("pendente").astype(str).str.strip().str.casefold()
@@ -266,7 +273,7 @@ with panel:
                 })
             st.dataframe(
                 pd.DataFrame(queue_rows),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             st.caption(
@@ -278,13 +285,12 @@ with panel:
 with products:
     st.subheader("📋 Planilha de produtos")
     st.caption(
-        "Cole links HTTPS da Shopee em lote. O importador tenta preencher automaticamente nome, "
-        "preço, foto e categoria lendo metadados, HTML e JSON/estado embutido no código-fonte público, "
-        "sem executar JavaScript. Links originais de afiliado são preservados; confira os dados antes de salvar."
+        "Cole links de afiliado já gerados na Amazon Associados ou eBay Partner Network. "
+        "O importador preserva a URL integral e não abre páginas, não raspa dados e não cria links por conta própria."
     )
     st.info(
-        "Importações novas entram como inativas e sem aprovação. Confira nome, preço, imagem e destino; "
-        "ative e aprove cada produto somente depois da revisão. Máximo de "
+        "Importações novas entram inativas e sem aprovação. Preencha os dados manualmente; marque a autorização da imagem "
+        "e, para eBay, a aprovação EPN antes de preparar/publicar conteúdo. O preço Amazon não é exibido nas cópias. Máximo de "
         f"{MAX_LINKS_PER_BATCH} links por lote."
     )
 
@@ -320,80 +326,61 @@ with products:
         "Edite os itens na planilha completa abaixo."
     )
     preview_columns = [
-        "id", "nome", "categoria", "preco", "link", "ativo", "aprovado_publicacao",
+        "id", "programa", "nome", "categoria", "preco", "link", "ativo", "aprovado_publicacao",
         "status_publicacao", "pinterest_status", "cliques", "pedidos",
     ]
     st.dataframe(
         catalog_view[preview_columns],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
+            "programa": st.column_config.TextColumn("Programa afiliado"),
             "link": st.column_config.LinkColumn("Link afiliado"),
             "ativo": st.column_config.CheckboxColumn("Ativo"),
             "aprovado_publicacao": st.column_config.CheckboxColumn("Aprovado"),
         },
     )
 
-    api_app_id = secret("shopee_affiliate_app_id")
-    api_secret = secret("shopee_affiliate_secret")
-    api_admin_pin = secret("shopee_affiliate_admin_pin")
-    if not api_app_id or not api_secret or not api_admin_pin:
-        st.session_state["shopee_affiliate_api_connected"] = False
-    with st.expander("🔗 Conectar API de Afiliados Shopee", expanded=False):
-        if not api_app_id or not api_secret or not api_admin_pin:
-            st.info(
-                "Quando a Shopee liberar o acesso, configure os dados abaixo em Manage app → Settings → Secrets no Streamlit Cloud. "
-                "O PIN protege as credenciais privadas porque o painel é público. Não os insira na planilha nem no código."
-            )
-            st.code(
-                'shopee_affiliate_app_id = "SEU_APP_ID"\n'
-                'shopee_affiliate_secret = "SUA_SECRET"\n'
-                'shopee_affiliate_admin_pin = "ESCOLHA_UM_PIN_LONGO_E_PRIVADO"',
-                language="toml",
-            )
-        else:
-            api_pin_input = st.text_input(
-                "PIN administrativo da API",
-                type="password",
-                key="shopee_affiliate_admin_pin_input",
-            )
-            st.caption("Credenciais localizadas nos Secrets. O teste abaixo faz apenas uma consulta de leitura.")
-            if st.button("🔌 Conectar / testar API", key="test_shopee_affiliate_api"):
-                if not hmac.compare_digest(str(api_pin_input), str(api_admin_pin)):
-                    st.session_state["shopee_affiliate_api_connected"] = False
-                    st.session_state["shopee_affiliate_api_error"] = "PIN administrativo incorreto."
-                else:
-                    try:
-                        test_shopee_affiliate_api_connection(str(api_app_id), str(api_secret))
-                        st.session_state["shopee_affiliate_api_connected"] = True
-                        st.session_state["shopee_affiliate_api_message"] = "Conexão validada. A próxima importação usará a API quando o itemId for identificável."
-                        st.session_state.pop("shopee_affiliate_api_error", None)
-                    except ShopeeAffiliateAPIError as exc:
-                        st.session_state["shopee_affiliate_api_connected"] = False
-                        st.session_state["shopee_affiliate_api_error"] = str(exc)
-            if st.session_state.get("shopee_affiliate_api_connected"):
-                st.success(st.session_state.get("shopee_affiliate_api_message", "API conectada."))
-            if st.session_state.get("shopee_affiliate_api_error"):
-                st.error(st.session_state["shopee_affiliate_api_error"])
+    st.info(
+        "Amazon: cole URL com tag de Associado ou amzn.to; nenhuma API Amazon está conectada, então use apenas fontes autorizadas para preço/imagem. "
+        "eBay: use link gerado pela EPN com campid ou o encurtador ebay.us. O sistema não modifica os parâmetros de rastreamento."
+    )
 
     editor_key = f"products_editor_{st.session_state['products_editor_version']}"
     working_df = clean(st.session_state["products_working_df"])
     edited = st.data_editor(
         working_df,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         key=editor_key,
         column_config={
-            "link": st.column_config.LinkColumn("Link Shopee"),
+            "programa": st.column_config.TextColumn("Programa afiliado"),
+            "preco": st.column_config.TextColumn(
+                "Preço de referência",
+                help="Não é inserido nas cópias Amazon; use somente dados permitidos pelo programa de afiliados.",
+            ),
+            "link": st.column_config.LinkColumn("Link afiliado original"),
             "imagem_url": st.column_config.LinkColumn("Link da foto"),
             "chamada": st.column_config.TextColumn(
                 "Chamada personalizada",
                 max_chars=MAX_CALLOUT_CHARS,
-                help="Opcional: uma frase curta e verificável. O sistema sempre acrescenta preço, link e aviso de afiliado.",
+                help="Opcional: frase curta e verificável. Para Amazon, não inclua preço fixo. O sistema mantém o link e inclui o aviso do programa.",
             ),
             "ativo": st.column_config.CheckboxColumn("Ativo"),
             "aprovado_publicacao": st.column_config.CheckboxColumn("Aprovado para publicação"),
+            "imagem_autorizada": st.column_config.CheckboxColumn(
+                "Tenho direito de usar a imagem/arte",
+                help="Confirme que a imagem é sua ou que você tem autorização para usá-la no Pinterest.",
+            ),
+            "epn_promocao_aprovada": st.column_config.CheckboxColumn(
+                "Aprovação escrita EPN para promoção/conteúdo",
+                help="Para eBay, marque somente após obter aprovação escrita da EPN para o método/conteúdo promocional.",
+            ),
+            "epn_mensageria_aprovada": st.column_config.CheckboxColumn(
+                "Aprovação escrita EPN para mensagens",
+                help="Necessária para usar o rascunho e handoff de eBay por WhatsApp, email, chat ou texto.",
+            ),
             "status_publicacao": st.column_config.SelectboxColumn(
                 "Estado da publicação", options=["pronto", "enviando", "enviado", "revisar"]
             ),
@@ -403,7 +390,7 @@ with products:
             "frequencia_dias": st.column_config.NumberColumn("Dias", min_value=1, max_value=30),
             "comissao_estimada": st.column_config.NumberColumn("Comissão", format="R$ %.2f"),
         },
-        disabled=["id", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "pinterest_pin_id"],
+        disabled=["id", "programa", "ultima_publicacao", "proxima_publicacao", "ultima_tentativa", "pinterest_pin_id"],
     )
     edited = clean(edited)
     st.caption(
@@ -414,21 +401,16 @@ with products:
 
     with st.form("bulk_import_form", clear_on_submit=True):
         pasted_links = st.text_area(
-            "Links da Shopee (um por linha ou separados por espaço/vírgula)",
+            "Links afiliados Amazon/eBay (um por linha ou separados por espaço/vírgula)",
             height=150,
-            placeholder="https://s.shopee.com.br/...\nhttps://shp.ee/...",
+            placeholder="https://www.amazon.com.br/dp/ASIN?tag=SEU-ID\nhttps://www.ebay.com/itm/ITEM?campid=1234567890",
         )
-        import_submitted = st.form_submit_button("🔎 Buscar dados e adicionar à tabela")
+        import_submitted = st.form_submit_button("➕ Adicionar links à tabela para revisão manual")
 
     if import_submitted:
-        api_connected = st.session_state.get("shopee_affiliate_api_connected", False)
-        api_credentials = (
-            (str(api_app_id), str(api_secret)) if api_connected and api_app_id and api_secret else None
-        )
         result = import_product_links(
             pasted_links,
             existing_links=edited["link"].tolist(),
-            affiliate_api_credentials=api_credentials,
         )
         if result["products"]:
             additions = pd.DataFrame(result["products"])
@@ -450,10 +432,10 @@ with products:
             elif result["duplicates"] or result["invalid"]:
                 st.warning(
                     f"Nenhum produto novo adicionado. Duplicados: {len(result['duplicates'])}; "
-                    f"links que não são HTTPS da Shopee: {len(result['invalid'])}."
+                    f"links Amazon/EPN inválidos ou sem rastreamento reconhecido: {len(result['invalid'])}."
                 )
             else:
-                st.warning("Nenhum link Shopee novo foi encontrado no lote.")
+                st.warning("Nenhum link afiliado Amazon/EPN novo foi encontrado no lote.")
             if result["invalid"]:
                 st.caption("Links ignorados por domínio/formato:")
                 st.code("\n".join(result["invalid"][:10]))
@@ -466,50 +448,20 @@ with products:
         )
         if report["incomplete"]:
             st.warning(
-                f"A Shopee não forneceu nome e/ou preço em {len(report['incomplete'])} link(s). "
-                "Esses campos ficaram em branco na tabela e precisam ser revisados antes da aprovação."
+                f"{len(report['incomplete'])} link(s) aguardam preenchimento manual de nome e imagem. "
+                "Preços não são extraídos nem confiados automaticamente."
             )
         if report.get("diagnostics"):
-            labels = {
-                "nome": "nome",
-                "preco": "preço",
-                "imagem_url": "foto",
-                "categoria": "categoria",
-            }
-            status_labels = {
-                "completo": "Nome e preço encontrados",
-                "parcial": "Alguns metadados encontrados",
-                "indisponivel": "A página não expôs metadados legíveis no código-fonte HTML inicial",
-                "redirecionamento_bloqueado": "Redirecionamento externo bloqueado por segurança",
-                "falha_de_conexao": "Não foi possível conectar à página",
-                "falha_ao_ler_pagina": "Não foi possível ler a página",
-                "resposta_nao_html": "A resposta não era uma página HTML",
-            }
-            with st.expander("🔍 Resultado da leitura automática por link", expanded=bool(report["incomplete"])):
+            with st.expander("🔎 Revisão manual dos links importados", expanded=True):
                 for item in report["diagnostics"]:
-                    status = item.get("status", "indisponivel")
-                    status_text = status_labels.get(status, f"Resposta da página: {status}")
-                    st.markdown(f"**{item['link']}**")
-                    st.caption(status_text)
-                    if item.get("api_used"):
-                        st.caption("Dados enriquecidos pela Shopee Affiliate Open API.")
-                    found = [labels[field] for field in item.get("extraidos", [])]
-                    missing = [labels[field] for field in item.get("faltando", [])]
-                    if found:
-                        st.write("Encontrados: " + ", ".join(found))
-                    if missing:
-                        st.warning("Faltando na tabela: " + ", ".join(missing))
-                st.info(
-                    "A importação lê HTML e dados JSON/estado embutido na resposta pública, mas não executa "
-                    "JavaScript nem contorna login, CAPTCHA ou bloqueios. Se a Shopee montar os dados apenas "
-                    "após chamadas do navegador, nome/preço podem não estar no código-fonte recebido; use o "
-                    "link direto do produto e preencha manualmente os campos que continuarem vazios. "
-                    "Os links importados permanecem inativos e sem aprovação."
-                )
+                    st.markdown(f"**{item['programa']}** — {item['link']}")
+                    st.caption(item["nota"])
+                    st.warning("Faltando: " + ", ".join(item["faltando"]))
+                st.info("A importação não acessa páginas de produto nem altera parâmetros de atribuição.")
         if report["duplicates"]:
             st.info(f"{len(report['duplicates'])} link(s) duplicado(s) foram ignorados.")
         if report["invalid"]:
-            st.warning(f"{len(report['invalid'])} link(s) que não são Shopee foram ignorados.")
+            st.warning(f"{len(report['invalid'])} link(s) inválidos, sem tag/campid ou fora dos programas aceitos foram ignorados.")
             st.code("\n".join(report["invalid"][:10]))
         if report["limit_reached"]:
             st.info(f"O lote foi limitado a {MAX_LINKS_PER_BATCH} links. Envie o restante em outro lote.")
@@ -530,7 +482,7 @@ with products:
             file_name=export["file_name"],
             mime=export["mime"],
             key=f"download_products_{format_name.casefold()}",
-            use_container_width=True,
+            width="stretch",
         )
 
 with ads:
@@ -559,7 +511,7 @@ with ads:
             "Escolha um formato e copie a composição. A prévia Pinterest coincide com o título e a descrição do Pin; "
             "se habilitado, o botão WhatsApp encaminha um rascunho ao seu endpoint; "
             "não envia mensagens nem publica conteúdo. "
-            "A chamada personalizada, o preço e o link cadastrado são mantidos quando aplicável."
+            "O preço Amazon é omitido; os links afiliados são preservados sem alteração."
         )
         if not (
             parse_bool(selected_row.get("ativo", False), default=False)
@@ -595,10 +547,15 @@ with ads:
                 )
             with whatsapp_tab:
                 st.caption("Mensagem curta com link original. Compartilhe apenas com quem consentiu e respeite pedidos para parar.")
-                st.code(manual_copies["whatsapp"], language=None)
+                if manual_copies["whatsapp"]:
+                    st.code(manual_copies["whatsapp"], language=None)
+                else:
+                    st.warning(manual_copies["whatsapp_warning"])
                 st.divider()
                 st.markdown("**Webhook opcional para preparar um rascunho**")
-                if not whatsapp_webhook_enabled:
+                if not manual_copies["whatsapp"]:
+                    st.info("Handoff indisponível até existir aprovação escrita EPN para mensageria.")
+                elif not whatsapp_webhook_enabled:
                     st.info("Desativado por padrão. O webhook só pode ser acionado manualmente após configuração nos Secrets.")
                 elif (
                     not whatsapp_webhook_url

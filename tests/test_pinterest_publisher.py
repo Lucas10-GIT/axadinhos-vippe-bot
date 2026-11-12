@@ -5,16 +5,18 @@ import pytest
 
 import pinterest_publisher as pinterest
 
-
+AMAZON_LINK = "https://amzn.to/affiliate-code"
+EBAY_LINK = "https://www.ebay.com/itm/123?campid=1234567890&mkcid=1"
 ROW = {
     "nome": "Organizador de gaveta",
     "preco": "R$ 29,90",
-    "link": "https://s.shopee.com.br/affiliate-code",
-    "imagem_url": "https://down-br.img.susercontent.com/file/product.jpg",
+    "link": AMAZON_LINK,
+    "imagem_url": "https://images.example.com/file/product.jpg",
+    "imagem_autorizada": True,
 }
 
 
-def test_build_pin_payload_preserves_affiliate_link_and_discloses_commission():
+def test_build_pin_payload_preserves_amazon_link_and_includes_exact_disclosure_without_static_price():
     payload = pinterest.build_pin_payload(ROW, "123456789")
     assert payload["board_id"] == "123456789"
     assert payload["title"] == "Organizador de gaveta"
@@ -24,20 +26,36 @@ def test_build_pin_payload_preserves_affiliate_link_and_discloses_commission():
         "url": ROW["imagem_url"],
         "is_standard": True,
     }
-    assert "R$ 29,90" in payload["description"]
-    assert "Link de afiliado" in payload["description"]
-    assert "sem custo adicional" in payload["description"]
+    assert "R$ 29,90" not in payload["description"]
+    assert "Consulte o preço e a disponibilidade atuais diretamente na Amazon" in payload["description"]
+    assert "Como participante do Programa de Associados da Amazon" in payload["description"]
     assert payload["alt_text"].startswith("Imagem do produto:")
 
 
-def test_build_pin_payload_includes_custom_callout_and_keeps_affiliate_disclosure():
+def test_build_pin_payload_includes_callout_and_keeps_amazon_disclosure():
     callout = "Uma opção prática para organizar a casa"
     payload = pinterest.build_pin_payload({**ROW, "chamada": callout}, "123456789")
-
     assert payload["description"].startswith(callout + "\n\n")
     assert ROW["link"] == payload["link"]
-    assert "Link de afiliado" in payload["description"]
-    assert "Preço e disponibilidade podem mudar" in payload["description"]
+    assert "Como participante do Programa de Associados da Amazon" in payload["description"]
+
+
+def test_amazon_pin_rejects_static_price_entered_in_custom_callout():
+    with pytest.raises(pinterest.PinterestPublisherError, match="preço estático"):
+        pinterest.build_pin_payload(
+            {**ROW, "chamada": "Aproveite por R$ 29,90 hoje"},
+            "123456789",
+        )
+
+
+def test_build_ebay_pin_requires_approval_and_uses_ebay_disclosure():
+    row = {**ROW, "link": EBAY_LINK, "epn_promocao_aprovada": True}
+    payload = pinterest.build_pin_payload(row, "123456789")
+    assert payload["link"] == EBAY_LINK
+    assert "eBay Partner Network" in payload["description"]
+    assert "R$ 29,90" in payload["description"]
+    with pytest.raises(pinterest.PinterestPublisherError, match="aprovação escrita"):
+        pinterest.build_pin_payload({**row, "epn_promocao_aprovada": "false"}, "123456789")
 
 
 def test_build_pin_payload_rejects_overlong_callout_and_never_truncates_disclosure():
@@ -51,8 +69,9 @@ def test_build_pin_payload_rejects_overlong_callout_and_never_truncates_disclosu
     ("row", "board", "message"),
     [
         ({**ROW, "imagem_url": ""}, "123", "imagem pública HTTPS"),
-        ({**ROW, "link": "https://example.com/item"}, "123", "link HTTPS válido da Shopee"),
-        ({**ROW, "nome": ""}, "123", "nome e preço"),
+        ({**ROW, "link": "https://example.com/item"}, "123", "link afiliado Amazon/EPN válido"),
+        ({**ROW, "nome": ""}, "123", "nome revisado"),
+        ({**ROW, "imagem_autorizada": False}, "123", "direito de usar"),
         (ROW, "board-x", "Board ID"),
     ],
 )

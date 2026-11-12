@@ -17,7 +17,7 @@ ROW = {
     "nome": "Organizador de gaveta",
     "preco": "R$ 29,90",
     "categoria": "Casa & Cozinha",
-    "link": "https://s.shopee.com.br/affiliate-code?utm_source=axadinhos",
+    "link": "https://amzn.to/affiliate-code?utm_source=axadinhos",
     "chamada": "Uma opção prática para organizar a casa",
     "ativo": True,
     "aprovado_publicacao": True,

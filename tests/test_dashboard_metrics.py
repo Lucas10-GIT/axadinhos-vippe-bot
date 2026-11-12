@@ -14,11 +14,12 @@ BASE = {
     "id": 1,
     "nome": "Organizador de gaveta",
     "preco": "R$ 29,90",
-    "link": "https://s.shopee.com.br/affiliate-code",
-    "imagem_url": "https://down-br.img.susercontent.com/file/product.jpg",
+    "link": "https://amzn.to/affiliate-code",
+    "imagem_url": "https://images.example.com/file/product.jpg",
     "categoria": "Casa",
     "ativo": True,
     "aprovado_publicacao": True,
+    "imagem_autorizada": True,
     "status_publicacao": "pronto",
     "pinterest_status": "pendente",
     "cliques": 20,
@@ -80,7 +81,7 @@ def test_attention_queue_explains_review_and_missing_product_data():
 
     full = build_attention_items(frame, limit=None)
     missing_row = full[full["ID"] == 3].iloc[0]
-    assert "Dados faltando: nome, preço, link afiliado" in missing_row["Ponto de atenção"]
+    assert "Dados faltando: nome, link afiliado" in missing_row["Ponto de atenção"]
     assert "Foto ausente para Pin" in missing_row["Ponto de atenção"]
     assert "Aguardando aprovação" in missing_row["Ponto de atenção"]
     assert "Inativo" in missing_row["Ponto de atenção"]

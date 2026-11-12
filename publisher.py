@@ -12,12 +12,12 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
-from urllib.parse import urlsplit
 
 import pandas as pd
 import requests
 
 from pinterest_publisher import PinterestPublisherError, build_pin_payload, send_pinterest_pin
+from affiliate_links import affiliate_program, is_valid_affiliate_link, is_valid_https_url
 
 OWNER = "Lucas10-GIT"
 REPO = "axadinhos-vippe-bot"
@@ -95,41 +95,15 @@ def _display(value: Any, fallback: str = "") -> str:
     return text or fallback
 
 
-def _valid_https_url(value: Any) -> bool:
-    text = _display(value)
-    if not text or any(character.isspace() for character in text):
-        return False
-    try:
-        parsed = urlsplit(text)
-        _ = parsed.port
-        return (
-            parsed.scheme.casefold() == "https"
-            and bool(parsed.hostname)
-            and parsed.username is None
-            and parsed.password is None
-        )
-    except ValueError:
-        return False
-
-
-def _valid_shopee_url(value: Any) -> bool:
-    if not _valid_https_url(value):
-        return False
-    host = (urlsplit(_display(value)).hostname or "").casefold().rstrip(".")
-    return (
-        host in {"shopee.com.br", "shopee.com", "shope.ee", "shp.ee"}
-        or host.endswith(".shopee.com.br")
-        or host.endswith(".shopee.com")
-        or host.endswith(".shp.ee")
-    )
-
-
 def is_publishable(row: Any) -> bool:
-    """Require a reviewed name, price and HTTPS Shopee affiliate destination."""
+    """Require an approved-program affiliate URL and an authorized Pin image."""
+    program = affiliate_program(row.get("link"))
     return bool(
         _display(row.get("nome"))
-        and _display(row.get("preco"))
-        and _valid_shopee_url(row.get("link"))
+        and is_valid_affiliate_link(row.get("link"))
+        and is_valid_https_url(row.get("imagem_url"))
+        and parse_bool(row.get("imagem_autorizada", False), default=False)
+        and (program != "ebay" or parse_bool(row.get("epn_promocao_aprovada", False), default=False))
     )
 
 

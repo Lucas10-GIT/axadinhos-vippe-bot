@@ -1,64 +1,55 @@
 # Axadinhos Vippe Bot
 
-Aplicativo Streamlit para importar e revisar ofertas da Shopee, preparar conteúdo para Pinterest, WhatsApp, Instagram e TikTok, e criar Pins linkados quando explicitamente autorizado. A base fica em `data/products.csv` no GitHub. O webhook opcional de WhatsApp só encaminha rascunhos mediante ação manual; nenhuma API social envia ou publica automaticamente em WhatsApp, Instagram ou TikTok, e o app não armazena contatos.
+Aplicativo Streamlit para preparar ofertas de afiliados para Pinterest, WhatsApp, Instagram e TikTok. A publicação automatizada permanece somente no Pinterest e exige aprovação manual do produto; WhatsApp, Instagram e TikTok são preparação manual, sem postagem por API. O catálogo operacional fica em `data/products.csv` no GitHub.
 
-## Importar links da Shopee
+## Programas afiliados aceitos
 
-Na aba **Produtos**, cole até 20 links HTTPS da Shopee por lote. O importador tenta obter nome, preço, foto e categoria pela API de afiliados quando há credenciais autorizadas; sem elas, usa leitura best-effort de metadados públicos, HTML e JSON embutido. A Shopee pode omitir os dados ou bloquear a leitura, então revise e complete os campos manualmente.
+O importador aceita links já gerados no **Amazon Associados** e na **eBay Partner Network (EPN)**. Ele preserva a URL inteira, inclusive os parâmetros de atribuição, mas não cria links afiliados, não abre páginas de produto, não raspa HTML, não segue redirecionamentos e não chama APIs de afiliados. Links diretos da Amazon precisam ter `tag`; links `amzn.to` também são aceitos. Links diretos do eBay precisam incluir o `campid` EPN de 10 dígitos; o encurtador oficial `ebay.us` também é aceito. O usuário deve gerar/copiar os links no portal do respectivo programa.
 
-O link de afiliado submetido é preservado. Links fora dos domínios HTTPS aceitos e duplicatas são ignorados. A importação adiciona itens à sessão do Streamlit; **Salvar produtos** grava a tabela no GitHub. Todo produto novo começa **inativo**, **sem aprovação** e com Pinterest em estado `pendente`. Revise nome, preço, imagem e destino antes de ativá-lo e aprová-lo.
+Links importados entram com dados vazios, inativos, sem aprovação e sem autorização de imagem. Preencha título/categoria/imagem manualmente e confira a atribuição antes de salvar. Para Amazon, o gerador **não inclui preço estático** e bloqueia valores monetários explícitos em título/chamada: preço e disponibilidade devem ser consultados na página Amazon, a menos que no futuro exista API licenciada configurada. A plataforma não usa imagens de produto Amazon por scraping. Só marque **Tenho direito de usar a imagem/arte** se o material for seu ou houver autorização válida.
 
-O acesso à Shopee Affiliate Open API depende de concessão da própria Shopee. Sem acesso, a importação tradicional continua disponível e não tenta contornar a autorização.
+Para eBay, antes de preparar conteúdo próprio ou publicar um Pin, marque **Aprovação escrita EPN para promoção/conteúdo** somente se essa aprovação tiver sido obtida. O texto de WhatsApp e o handoff ficam bloqueados até a aprovação escrita específica da EPN para mensagens. Os links eBay não são alterados pelo app.
 
-## Preparar conteúdo para copiar
+A Shopee foi retirada do fluxo ativo. Os quatro registros anteriores foram preservados, sem possibilidade de publicação, em `data/archive/shopee_products_legacy.csv`; o catálogo principal não os carrega.
 
-Na aba **Produtos**, o campo opcional **Chamada personalizada** aceita uma frase curta de até 180 caracteres. A aba **Anúncios** inclui também a composição para Pinterest — título, descrição e link de destino — igual ao payload do Pin publicado. WhatsApp recebe link no corpo; Instagram usa CTA para a bio e mostra a URL à parte; TikTok usa CTA para o perfil e mantém a URL separada. Hashtags são limitadas e derivadas da categoria.
+## Conteúdo copiável
 
-No WhatsApp, o texto inclui o link original. Compartilhe somente com pessoas que aceitaram receber ofertas e respeite pedidos para parar. O app não importa listas de contatos nem automatiza envios.
+A aba **Anúncios** monta rascunhos com disclosure próprio por programa e mantém o link original. WhatsApp leva o link no texto, com consentimento do destinatário; Instagram usa CTA para a bio e mostra a URL separada; TikTok mantém a URL separada e lembra a opção nativa de divulgação comercial. Para eBay, o conteúdo permanece condicionado à aprovação EPN; a mensageria requer autorização adicional.
 
-Na legenda do Instagram, o CTA aponta para a bio e a URL afiliada original aparece em bloco separado para atualização manual do perfil. O texto não afirma que URLs na legenda do feed são clicáveis.
+No Amazon Associados, a cópia usa a declaração exigida pelo contrato brasileiro: “Como participante do Programa de Associados da Amazon, sou remunerado pelas compras qualificadas efetuadas”. Para eBay, o texto identifica a relação de afiliado e a possível comissão. Confirme ainda as regras atuais da plataforma social e as exigências legais aplicáveis.
 
-Para TikTok, a URL afiliada é mostrada em um campo separado e não é inserida no texto do vídeo/legenda. Use-a somente em uma superfície de link permitida. Antes de publicar, ative no próprio TikTok a divulgação de conteúdo comercial aplicável à oferta. O app não carrega nem publica fotos ou vídeos no TikTok.
-
-Todos os rascunhos incluem disclosure de afiliado. Preço, estoque e disponibilidade podem mudar na Shopee; confira esses dados antes de publicar. No Pinterest, mantenha Pins originais e relevantes e evite publicações afiliadas repetitivas ou em grande volume.
-
-Opcionalmente, é possível configurar um webhook HTTPS próprio para encaminhar manualmente o rascunho de WhatsApp de um produto ativo e aprovado. A opção vem desligada (`whatsapp_draft_webhook_enabled=false`), não roda no cron e exige PIN administrativo e confirmação no botão. O payload usa assinatura HMAC, chave de idempotência, `send=false` e não contém telefone ou lista de contatos. Isso é apenas um handoff para uma fila de rascunhos: não chama a WhatsApp Cloud API nem confirma envio ou entrega. Configure somente um endpoint que você controla e que respeite esses campos. Para envio real, seria necessária uma integração oficial separada, com opt-in, opt-out e demais requisitos da Meta.
+O webhook opcional de WhatsApp é apenas handoff manual de um rascunho aprovado para endpoint controlado pelo usuário. Vem desligado, não envia mensagens, não roda no cron, não recebe contatos e usa HMAC, chave de idempotência e `send=false`. Envio real exigiria integração oficial separada, opt-in/opt-out e demais políticas da Meta.
 
 ## Publicação no Pinterest
 
-A aba **Canais** pode criar um Pin público pela API oficial v5. O Pin leva a URL original de afiliado no campo de destino e contém a chamada, o aviso de afiliado e a ressalva de preço/disponibilidade. Exige produto ativo e aprovado manualmente, nome, preço, imagem pública HTTPS, board ID numérico, credenciais válidas e opt-in manual ativo.
+O publicador usa a API oficial v5 e somente cria Pins linkados ao link afiliado original. Um Pin precisa de produto ativo e aprovado, título revisado, URL afiliada válida, imagem pública HTTPS com autorização confirmada, Board ID e credenciais válidas. Para EPN, também é exigida confirmação de aprovação escrita do conteúdo/método promocional. Mantenha os Pins originais e relevantes e evite conteúdo repetitivo ou em grande volume.
 
-O workflow do GitHub Actions pode publicar somente no Pinterest. O cron de quatro horas é bloqueado por padrão e requer tanto a trava geral quanto o opt-in específico do Pinterest. Nenhum conteúdo real é publicado pelo CI de testes.
+O GitHub Actions publica exclusivamente no Pinterest, no máximo um Pin por execução. O agendamento a cada quatro horas fica bloqueado até que duas variáveis de opt-in sejam ativadas; a ação manual também exige confirmação. Resultados ambíguos entram em revisão e não são reenviados automaticamente.
 
-O publicador reserva o produto no CSV antes do envio, registra o ID do Pin e não repete automaticamente um resultado ambíguo. Registros históricos `enviado` sem recibo de Pin são colocados em revisão para impedir duplicação até a confirmação humana.
+## Dados e painel
 
-## Painel
+O painel reúne produtos, atividade registrada, comissão estimada e pendências. **Atenção agora** mostra dados incompletos, links sem rastreamento válido, autorização de imagem ausente e aprovações EPN pendentes. As visões rápidas do catálogo são somente leitura; não alteram aprovação nem elegibilidade. A tabela pode ser baixada em CSV, Excel, TSV ou JSON.
 
-O **Painel** reúne tamanho do catálogo, produtos ativos e aprovados, pendências, comissão estimada, cliques, pedidos e Pins registrados. **Atenção agora** mostra revisão, envio em andamento, falta de aprovação/ativação, dados ausentes e fotos faltantes. O ranking usa a mesma pontuação do publicador; o gráfico por categoria aparece somente quando existem cliques ou pedidos registrados. A fila estimada do Pinterest é somente leitura e separada do cron.
+## APIs e credenciais
 
-Na aba **Produtos**, as visões rápidas segmentam o catálogo por pendências, aprovação, atividade, dados incompletos e estado do Pinterest; também é possível restringir a consulta por categoria. São filtros de leitura: não alteram produtos, não aprovam ofertas e não mudam a elegibilidade da fila. A planilha completa abaixo continua sendo o local de edição.
+Não há segredo Amazon ou eBay necessário para importar links prontos. A API não está integrada. A Creators API da Amazon exige participação no programa do marketplace-alvo, cadastro para acesso e credenciais; a documentação atualmente lista requisito de 10 vendas qualificadas nos últimos 30 dias. A Browse API do eBay requer token de aplicação e não substitui a geração de URLs EPN rastreadas. Não tente contornar aprovação por scraping.
 
-## Configuração
-
-Consulte [CONFIGURAR-SECRETS.md](CONFIGURAR-SECRETS.md) para configurar Streamlit Cloud, GitHub Actions, o webhook opcional de rascunhos e, quando disponível, a Shopee Affiliate Open API. Streamlit e GitHub usam armazenamentos separados. Instagram e TikTok não têm integração API neste projeto; o webhook de WhatsApp apenas encaminha rascunhos e não envia mensagens.
-
-Exemplo de Secrets do Streamlit:
-
-```toml
-github_token = "TOKEN_COM_ACESSO_AO_REPOSITORIO"
-pinterest_access_token = "TOKEN_OAUTH_DO_PINTEREST"
-pinterest_board_id = "ID_NUMERICO_DO_BOARD"
-pinterest_publish_enabled = false
-whatsapp_draft_webhook_enabled = false
-```
-
-Mantenha `pinterest_publish_enabled=false` até estar pronto para publicar Pins reais. A presença de credenciais não ativa o cron.
+Veja [CONFIGURAR-SECRETS.md](CONFIGURAR-SECRETS.md) para configurar GitHub, Pinterest e o webhook opcional. Streamlit Cloud e GitHub Actions têm armazenamentos de Secrets separados.
 
 ## Testes locais
 
-Os testes usam sessões falsas e não fazem chamadas reais ao GitHub, Pinterest, Shopee ou webhook. Também verificam a formatação por canal, a preservação do link afiliado, disclosures, assinatura HMAC e bloqueios de aprovação/ativação.
+Os testes usam sessões falsas; não fazem chamadas reais aos programas de afiliados, GitHub, Pinterest ou webhook. Eles cobrem preservação de link, validação de tags/campaign ID, disclosures, gates de aprovação e estados multicanal.
 
 ```bash
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest -q
 ```
+
+## Fontes oficiais
+
+- [Amazon Associates Brasil — Contrato Operacional](https://associados.amazon.com.br/help/operating/agreement/)
+- [Amazon Associates Brasil — Políticas do Programa](https://associados.amazon.com.br/help/operating/policies/)
+- [Amazon Creators API — introdução e requisitos](https://affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction)
+- [eBay Partner Network — Network Agreement](https://partnernetwork.ebay.com/page/network-agreement)
+- [eBay EPN — criar link afiliado](https://partnernetwork.ebay.com/resources/create-your-affiliate-link)
+- [eBay — estrutura de link rastreado](https://developer.ebay.com/api-docs/buy/static/ref-epn-link.html)

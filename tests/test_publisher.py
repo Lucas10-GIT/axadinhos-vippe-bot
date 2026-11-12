@@ -9,13 +9,14 @@ import requests
 import publisher
 
 NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
-AFFILIATE_URL = "https://s.shopee.com.br/affiliate-code?utm_source=axadinhos"
+AFFILIATE_URL = "https://amzn.to/affiliate-code?utm_source=axadinhos"
 ROW = {
     "id": 7,
     "nome": "Organizador de gaveta",
     "preco": "R$ 29,90",
     "link": AFFILIATE_URL,
-    "imagem_url": "https://down-br.img.susercontent.com/file/product.jpg",
+    "imagem_url": "https://images.example.com/file/product.jpg",
+    "imagem_autorizada": True,
     "categoria": "Casa",
     "ativo": True,
     "aprovado_publicacao": True,
@@ -106,12 +107,17 @@ def test_enabled_channels_only_returns_explicit_pinterest_opt_in():
     assert publisher._normalise_channels(["whatsapp", "instagram", "tiktok"]) == ()
 
 
-def test_is_due_requires_active_approved_ready_and_valid_shopee_link():
+def test_is_due_requires_active_approved_ready_and_valid_tracked_link_with_authorized_image():
     assert publisher.is_due(ROW, NOW, ["pinterest"])
     assert not publisher.is_due({**ROW, "ativo": False}, NOW, ["pinterest"])
     assert not publisher.is_due({**ROW, "aprovado_publicacao": False}, NOW, ["pinterest"])
     assert not publisher.is_due({**ROW, "status_publicacao": "revisar"}, NOW, ["pinterest"])
     assert not publisher.is_due({**ROW, "link": "https://example.com/item"}, NOW, ["pinterest"])
+    assert not publisher.is_due({**ROW, "imagem_autorizada": False}, NOW, ["pinterest"])
+    assert not publisher.is_due({**ROW, "imagem_url": ""}, NOW, ["pinterest"])
+    ebay = {**ROW, "link": "https://www.ebay.com/itm/123?campid=1234567890"}
+    assert not publisher.is_due(ebay, NOW, ["pinterest"])
+    assert publisher.is_due({**ebay, "epn_promocao_aprovada": True}, NOW, ["pinterest"])
     not_yet = {**ROW, "proxima_publicacao": (NOW + timedelta(minutes=1)).isoformat()}
     assert not publisher.is_due(not_yet, NOW, ["pinterest"])
 
@@ -163,7 +169,7 @@ def test_pinterest_publishes_once_with_original_affiliate_link_and_checkpoints()
     url, request = session.post_calls[0]
     assert url == "https://api.pinterest.com/v5/pins"
     assert request["json"]["link"] == AFFILIATE_URL
-    assert "Link de afiliado" in request["json"]["description"]
+    assert "Como participante do Programa de Associados da Amazon" in request["json"]["description"]
     assert session.events == ["get", "put", "pinterest", "put", "put"]
     assert len(session.put_calls) == 3
     saved = session.frame.iloc[0]
@@ -201,18 +207,23 @@ def test_pinterest_failure_marks_review_and_prevents_automatic_retry():
     assert len(session.post_calls) == post_count
 
 
-def test_invalid_pin_payload_fails_before_post_and_marks_review():
+def test_incomplete_pin_payload_is_excluded_from_queue_before_any_attempt():
     invalid = {**ROW, "imagem_url": ""}
     session = FakeSession(frame=[invalid])
-    with pytest.raises(RuntimeError, match="Pré-validação do Pinterest"):
-        publisher.main(ENV_PINTEREST, session=session, now=NOW)
+    assert publisher.main(ENV_PINTEREST, session=session, now=NOW) == 0
     assert not session.post_calls
-    assert session.frame.iloc[0]["pinterest_status"] == "revisar"
-    assert session.frame.iloc[0]["status_publicacao"] == "revisar"
+    assert session.frame.iloc[0]["pinterest_status"] == "pendente"
+    assert session.frame.iloc[0]["status_publicacao"] == "pronto"
 
 
 def test_manual_product_id_targets_only_selected_product():
-    other = {**ROW, "id": 8, "nome": "Outro produto", "link": "https://shopee.com.br/outro"}
+    other = {
+        **ROW,
+        "id": 8,
+        "nome": "Outro produto",
+        "link": "https://www.ebay.com/itm/123?campid=1234567890",
+        "epn_promocao_aprovada": True,
+    }
     session = FakeSession(frame=[ROW, other])
     assert publisher.main(ENV_PINTEREST, session=session, now=NOW, product_id=8) == 0
     assert len(session.post_calls) == 1

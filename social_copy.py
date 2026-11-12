@@ -5,15 +5,17 @@ import math
 import re
 import unicodedata
 from typing import Any
-from urllib.parse import urlsplit
 
+from affiliate_links import (
+    affiliate_destination,
+    affiliate_disclosure,
+    affiliate_program,
+    explicit_true,
+    is_valid_affiliate_link,
+)
 from offer_copy import get_custom_callout
 from pinterest_publisher import PinterestPublisherError, build_pin_copy
 
-AFFILIATE_DISCLOSURE = (
-    "Aviso de afiliado: posso receber comissão se você comprar por um link de afiliado, "
-    "sem custo extra. Preço e disponibilidade podem mudar."
-)
 MAX_SOCIAL_TITLE_CHARS = 72
 
 
@@ -41,32 +43,6 @@ def _compact_title(value: Any, limit: int = MAX_SOCIAL_TITLE_CHARS) -> str:
     if len(shortened) < limit // 2:
         shortened = text[: limit - 1].rstrip(" ,;:-")
     return shortened + "…"
-
-
-def _valid_shopee_link(value: Any) -> bool:
-    if not isinstance(value, str) or not value or value != value.strip():
-        return False
-    if any(character.isspace() for character in value):
-        return False
-    try:
-        parsed = urlsplit(value)
-        host = (parsed.hostname or "").casefold().rstrip(".")
-        port = parsed.port
-    except (ValueError, UnicodeError):
-        return False
-    return (
-        parsed.scheme.casefold() == "https"
-        and bool(host)
-        and port in (None, 443)
-        and parsed.username is None
-        and parsed.password is None
-        and (
-            host in {"shopee.com.br", "shopee.com", "shope.ee", "shp.ee"}
-            or host.endswith(".shopee.com.br")
-            or host.endswith(".shopee.com")
-            or host.endswith(".shp.ee")
-        )
-    )
 
 
 def _category_hashtag(value: Any) -> str:
@@ -107,6 +83,7 @@ def build_manual_copies(row: Any) -> dict[str, str]:
         name = _compact_title(row.get("nome"))
         price = _text(row.get("preco"))
         link = row.get("link")
+        program = affiliate_program(link)
         category = _text(row.get("categoria"))
         callout = get_custom_callout(row)
     except ValueError as exc:
@@ -119,39 +96,60 @@ def build_manual_copies(row: Any) -> dict[str, str]:
     except PinterestPublisherError as exc:
         raise SocialCopyError(str(exc)) from None
 
-    if not name or not price:
-        raise SocialCopyError("Preencha nome e preço revisados antes de preparar o conteúdo.")
-    if not _valid_shopee_link(link):
-        raise SocialCopyError("O produto precisa ter um link HTTPS válido da Shopee.")
+    if not name:
+        raise SocialCopyError("Preencha o nome revisado antes de preparar o conteúdo.")
+    if not is_valid_affiliate_link(link):
+        raise SocialCopyError("O produto precisa ter um link afiliado Amazon/EPN válido.")
 
     opener = callout or "Confira este achadinho:"
     hashtags = _hashtags(category)
+    disclosure = affiliate_disclosure(link)
+    destination = affiliate_destination(link)
+    price_line = (
+        "Consulte o preço e a disponibilidade atuais diretamente na Amazon."
+        if program == "amazon"
+        else f"Preço de referência: {price}. Confirme o valor e a disponibilidade no eBay."
+        if price
+        else "Confira o preço e a disponibilidade atuais no eBay."
+    )
+    if program == "ebay" and not explicit_true(row.get("epn_promocao_aprovada", False)):
+        raise SocialCopyError(
+            "A EPN exige aprovação escrita para métodos ou conteúdo promocional próprios; confirme-a na coluna de aprovação antes de preparar peças."
+        )
 
     whatsapp = "\n\n".join([
         opener,
         name,
-        f"Preço: {price}",
-        f"Veja a oferta na Shopee: {link}",
-        AFFILIATE_DISCLOSURE,
+        price_line,
+        f"Veja a oferta {destination}: {link}",
+        disclosure,
     ])
+    whatsapp_warning = ""
+    if program == "ebay" and not explicit_true(row.get("epn_mensageria_aprovada", False)):
+        whatsapp = ""
+        whatsapp_warning = (
+            "A EPN classifica mensagens/e-mail/texto como método sujeito a aprovação prévia. "
+            "Não use o rascunho em WhatsApp sem essa aprovação escrita."
+        )
     instagram = "\n\n".join([
         opener,
         name,
-        f"Preço: {price}",
+        price_line,
         "Link da oferta na bio.",
-        AFFILIATE_DISCLOSURE,
+        disclosure,
         hashtags,
     ])
     tiktok = "\n\n".join([
         opener,
         name,
-        f"Preço: {price}",
+        price_line,
         "Confira a oferta pelo link do perfil.",
-        AFFILIATE_DISCLOSURE,
+        disclosure,
         hashtags,
     ])
     return {
         "whatsapp": whatsapp,
+        "whatsapp_warning": whatsapp_warning,
         "instagram": instagram,
         "tiktok": tiktok,
         "pinterest_title": pinterest_copy["title"],

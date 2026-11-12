@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from publisher import parse_bool, score
+from affiliate_links import affiliate_program, explicit_true, is_valid_affiliate_link
 
 
 def _text(value: Any) -> str:
@@ -55,19 +56,22 @@ def build_attention_items(frame: pd.DataFrame, limit: int | None = 6) -> pd.Data
         if pinterest_status == "revisar":
             reasons.append("Pinterest precisa de revisão")
 
-        missing = [
-            label
-            for field, label in (
-                ("nome", "nome"),
-                ("preco", "preço"),
-                ("link", "link afiliado"),
-            )
-            if not _text(row.get(field))
-        ]
+        missing = [label for field, label in (("nome", "nome"), ("link", "link afiliado")) if not _text(row.get(field))]
+        invalid_link = bool(_text(row.get("link"))) and not is_valid_affiliate_link(row.get("link"))
         if missing:
             reasons.append("Dados faltando: " + ", ".join(missing))
+        if invalid_link:
+            reasons.append("Link afiliado inválido ou sem rastreamento reconhecido")
         if not _text(row.get("imagem_url")) and pinterest_status != "enviado":
             reasons.append("Foto ausente para Pin")
+        elif pinterest_status != "enviado" and not explicit_true(row.get("imagem_autorizada", False)):
+            reasons.append("Confirme autorização da imagem/arte para Pinterest")
+
+        if (
+            affiliate_program(row.get("link")) == "ebay"
+            and not explicit_true(row.get("epn_promocao_aprovada", False))
+        ):
+            reasons.append("Aguardando aprovação escrita EPN para promoção/conteúdo")
 
         approved = parse_bool(row.get("aprovado_publicacao", False), default=False)
         active = parse_bool(row.get("ativo", False), default=False)
@@ -79,7 +83,7 @@ def build_attention_items(frame: pd.DataFrame, limit: int | None = 6) -> pd.Data
         if not reasons:
             continue
 
-        priority = 0 if review_needed else 1 if missing else 2 if not approved else 3
+        priority = 0 if review_needed else 1 if missing or invalid_link else 2 if not approved else 3
         items.append({
             "_priority": priority,
             "ID": int(_number(row.get("id"))),
@@ -127,9 +131,17 @@ def filter_product_catalog(
         active = parse_bool(row.get("ativo", False), default=False)
         approved = parse_bool(row.get("aprovado_publicacao", False), default=False)
         pinterest_status = _text(row.get("pinterest_status")).casefold()
-        missing = any(
-            not _text(row.get(field)) for field in ("nome", "preco", "link")
-        ) or (pinterest_status != "enviado" and not _text(row.get("imagem_url")))
+        bad_link = bool(_text(row.get("link"))) and not is_valid_affiliate_link(row.get("link"))
+        missing = (
+            any(not _text(row.get(field)) for field in ("nome", "link"))
+            or bad_link
+            or (pinterest_status != "enviado" and not _text(row.get("imagem_url")))
+            or (pinterest_status != "enviado" and not explicit_true(row.get("imagem_autorizada", False)))
+            or (
+                affiliate_program(row.get("link")) == "ebay"
+                and not explicit_true(row.get("epn_promocao_aprovada", False))
+            )
+        )
         activity = any(
             _number(row.get(field)) > 0
             for field in ("cliques", "pedidos", "comissao_estimada")
