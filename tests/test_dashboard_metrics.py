@@ -5,6 +5,7 @@ from dashboard_metrics import (
     build_category_performance,
     build_dashboard_kpis,
     build_top_products,
+    filter_product_catalog,
 )
 from publisher import score
 
@@ -126,3 +127,49 @@ def test_empty_catalog_returns_zero_kpis_and_empty_visualization_frames():
     assert build_attention_items(frame).empty
     assert build_top_products(frame).empty
     assert build_category_performance(frame).empty
+
+
+def test_catalog_segments_filter_by_status_activity_missing_data_and_category():
+    frame = pd.DataFrame([
+        {**BASE, "id": 1, "categoria": "Casa", "pinterest_status": "pendente"},
+        {
+            **BASE,
+            "id": 2,
+            "categoria": "Pet",
+            "pinterest_status": "enviado",
+            "cliques": 0,
+            "pedidos": 0,
+            "comissao_estimada": 0,
+        },
+        {
+            **BASE,
+            "id": 3,
+            "categoria": "Casa",
+            "nome": "",
+            "imagem_url": "",
+            "ativo": False,
+            "aprovado_publicacao": False,
+            "pinterest_status": "revisar",
+        },
+    ])
+    original = frame.copy(deep=True)
+
+    assert filter_product_catalog(frame, "Ativos e aprovados")["id"].tolist() == [1, 2]
+    assert filter_product_catalog(frame, "Com atividade registrada")["id"].tolist() == [1, 3]
+    assert filter_product_catalog(frame, "Dados incompletos")["id"].tolist() == [3]
+    assert filter_product_catalog(frame, "Pinterest pendente")["id"].tolist() == [1]
+    assert filter_product_catalog(frame, "Pinterest enviado")["id"].tolist() == [2]
+    assert filter_product_catalog(frame, "Pinterest em revisão")["id"].tolist() == [3]
+    assert filter_product_catalog(frame, "Todos", category="cAsA")["id"].tolist() == [1, 3]
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_attention_catalog_segment_uses_existing_attention_logic():
+    frame = pd.DataFrame([
+        {**BASE, "id": 1},
+        {**BASE, "id": 2, "aprovado_publicacao": False},
+    ])
+
+    result = filter_product_catalog(frame, "Precisam de atenção")
+
+    assert result["id"].tolist() == [2]

@@ -8,10 +8,12 @@ import pandas as pd
 import requests
 import streamlit as st
 from dashboard_metrics import (
+    CATALOG_SEGMENTS,
     build_attention_items,
     build_category_performance,
     build_dashboard_kpis,
     build_top_products,
+    filter_product_catalog,
 )
 from offer_copy import MAX_CALLOUT_CHARS
 from product_importer import MAX_LINKS_PER_BATCH, import_product_links
@@ -284,6 +286,52 @@ with products:
         "Importações novas entram como inativas e sem aprovação. Confira nome, preço, imagem e destino; "
         "ative e aprove cada produto somente depois da revisão. Máximo de "
         f"{MAX_LINKS_PER_BATCH} links por lote."
+    )
+
+    st.markdown("**Visões rápidas do catálogo**")
+    working_catalog = clean(st.session_state["products_working_df"])
+    categories = sorted(
+        {
+            value
+            for value in working_catalog["categoria"].fillna("").astype(str).str.strip()
+            if value
+        },
+        key=str.casefold,
+    )
+    view_col, category_col = st.columns([1, 1])
+    selected_segment = view_col.selectbox(
+        "Segmento",
+        CATALOG_SEGMENTS,
+        key="catalog_segment_filter",
+    )
+    selected_category = category_col.selectbox(
+        "Categoria",
+        ["Todas", *categories],
+        key="catalog_category_filter",
+    )
+    catalog_view = filter_product_catalog(
+        working_catalog,
+        segment=selected_segment,
+        category=None if selected_category == "Todas" else selected_category,
+    )
+    st.caption(
+        f"{len(catalog_view)} de {len(working_catalog)} produtos. "
+        "Esta visão é somente para consulta; não altera aprovação, estados nem a fila do publicador. "
+        "Edite os itens na planilha completa abaixo."
+    )
+    preview_columns = [
+        "id", "nome", "categoria", "preco", "link", "ativo", "aprovado_publicacao",
+        "status_publicacao", "pinterest_status", "cliques", "pedidos",
+    ]
+    st.dataframe(
+        catalog_view[preview_columns],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "link": st.column_config.LinkColumn("Link afiliado"),
+            "ativo": st.column_config.CheckboxColumn("Ativo"),
+            "aprovado_publicacao": st.column_config.CheckboxColumn("Aprovado"),
+        },
     )
 
     api_app_id = secret("shopee_affiliate_app_id")

@@ -36,6 +36,8 @@ O publicador reserva o produto no CSV antes do envio, registra o ID do Pin e nã
 
 O **Painel** reúne tamanho do catálogo, produtos ativos e aprovados, pendências, comissão estimada, cliques, pedidos e Pins registrados. **Atenção agora** mostra revisão, envio em andamento, falta de aprovação/ativação, dados ausentes e fotos faltantes. O ranking usa a mesma pontuação do publicador; o gráfico por categoria aparece somente quando existem cliques ou pedidos registrados. A fila estimada do Pinterest é somente leitura e separada do cron.
 
+Na aba **Produtos**, as visões rápidas segmentam o catálogo por pendências, aprovação, atividade, dados incompletos e estado do Pinterest; também é possível restringir a consulta por categoria. São filtros de leitura: não alteram produtos, não aprovam ofertas e não mudam a elegibilidade da fila. A planilha completa abaixo continua sendo o local de edição.
+
 ## Configuração
 
 Consulte [CONFIGURAR-SECRETS.md](CONFIGURAR-SECRETS.md) para configurar Streamlit Cloud, GitHub Actions, o webhook opcional de rascunhos e, quando disponível, a Shopee Affiliate Open API. Streamlit e GitHub usam armazenamentos separados. Instagram e TikTok não têm integração API neste projeto; o webhook de WhatsApp apenas encaminha rascunhos e não envia mensagens.

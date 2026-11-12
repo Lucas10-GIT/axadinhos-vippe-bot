@@ -95,6 +95,70 @@ def build_attention_items(frame: pd.DataFrame, limit: int | None = 6) -> pd.Data
     return result[columns].reset_index(drop=True)
 
 
+CATALOG_SEGMENTS = (
+    "Todos",
+    "Precisam de atenção",
+    "Ativos e aprovados",
+    "Com atividade registrada",
+    "Dados incompletos",
+    "Pinterest pendente",
+    "Pinterest enviado",
+    "Pinterest em revisão",
+)
+
+
+def filter_product_catalog(
+    frame: pd.DataFrame,
+    segment: str = "Todos",
+    category: str | None = None,
+) -> pd.DataFrame:
+    """Return a read-only catalog view; this never changes publish eligibility or state."""
+    if frame.empty:
+        return frame.copy()
+
+    selected = str(segment or "Todos")
+    attention_ids: set[int] = set()
+    if selected == "Precisam de atenção":
+        attention = build_attention_items(frame, limit=None)
+        attention_ids = set(attention["ID"].astype(int).tolist())
+
+    keep = []
+    for _, row in frame.iterrows():
+        active = parse_bool(row.get("ativo", False), default=False)
+        approved = parse_bool(row.get("aprovado_publicacao", False), default=False)
+        pinterest_status = _text(row.get("pinterest_status")).casefold()
+        missing = any(
+            not _text(row.get(field)) for field in ("nome", "preco", "link")
+        ) or (pinterest_status != "enviado" and not _text(row.get("imagem_url")))
+        activity = any(
+            _number(row.get(field)) > 0
+            for field in ("cliques", "pedidos", "comissao_estimada")
+        )
+
+        if selected == "Precisam de atenção":
+            matches_segment = int(_number(row.get("id"))) in attention_ids
+        elif selected == "Ativos e aprovados":
+            matches_segment = active and approved
+        elif selected == "Com atividade registrada":
+            matches_segment = activity
+        elif selected == "Dados incompletos":
+            matches_segment = missing
+        elif selected == "Pinterest pendente":
+            matches_segment = pinterest_status == "pendente"
+        elif selected == "Pinterest enviado":
+            matches_segment = pinterest_status == "enviado"
+        elif selected == "Pinterest em revisão":
+            matches_segment = pinterest_status == "revisar"
+        else:
+            matches_segment = True
+
+        if category and _text(row.get("categoria")).casefold() != category.strip().casefold():
+            matches_segment = False
+        keep.append(matches_segment)
+
+    return frame.loc[keep].copy()
+
+
 def build_dashboard_kpis(frame: pd.DataFrame) -> dict[str, int | float]:
     """Summarize persisted catalog counts without inventing time-series data."""
     if frame.empty:
